@@ -60,12 +60,14 @@ class TaskRegistry():
         return self.task_classes[name]
     
     def get_cfgs(self, name, load_run=None) -> Tuple[LeggedRobotCfg, LeggedRobotCfgPPO]:
-        if load_run is not None:
+        if load_run is not None and load_run!='':
             from runpy import run_path
-            cfg_path = f'./logs/rough_h1/{load_run}/h1_config.py'
+            cfg_path = f'./HST/legged_gym/logs/rough_{name}/{load_run}/{name}_config.py'
             cfgs = run_path(cfg_path)
-            train_cfg = cfgs['H1RoughCfgPPO']
-            env_cfg = cfgs['H1RoughCfg']
+            train_cfg = self.train_cfgs[name]
+            env_cfg = self.env_cfgs[name]
+            # train_cfg = cfgs['H1RoughCfgPPO']
+            # env_cfg = cfgs['H1RoughCfg']
             print('Loaded config from:', cfg_path)
         else:
             train_cfg = self.train_cfgs[name]
@@ -166,7 +168,7 @@ class TaskRegistry():
         resume = train_cfg.runner.resume
         if resume:
             # load previously trained model
-            resume_path = get_load_path(log_root, load_run=train_cfg.runner.load_run, checkpoint=train_cfg.runner.checkpoint)
+            resume_path = get_load_path(log_root, load_run=train_cfg.runner.load_run if train_cfg.runner.load_run != '' else train_cfg.runner.run_name, checkpoint=train_cfg.runner.checkpoint)
             print(f"Loading model from: {resume_path}")
             runner.load(resume_path)
         return runner, train_cfg

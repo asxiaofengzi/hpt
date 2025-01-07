@@ -34,17 +34,17 @@ from collections import deque
 import statistics
 
 # from torch.utils.tensorboard import SummaryWriter
-import torch
-import numpy as np
 
+import numpy as np
 from rsl_rl.algorithms import PPO
 from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, ActorCriticTransformer
 # from rsl_rl.env import VecEnv
 from legged_gym.envs.h1.h1 import H1
 import IPython; e = IPython.embed
-
+from isaacgym import gymapi, gymtorch
 import wandb
 
+import torch
 class OnPolicyRunner:
 
     def __init__(self,
@@ -74,6 +74,7 @@ class OnPolicyRunner:
         self.alg = PPO(actor_critic, device=self.device, **self.alg_cfg)
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
+        self.video_step=-1
 
         # init storage and model
         self.alg.init_storage(self.env.num_envs, self.num_steps_per_env, [self.env.obs_context_len, self.env.num_obs], [self.env.num_privileged_obs], [self.env.num_actions])
@@ -106,9 +107,14 @@ class OnPolicyRunner:
         donebuffer = deque(maxlen=100)
         cur_reward_sum = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
         cur_episode_length = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
+        
 
-        tot_iter = self.current_learning_iteration + num_learning_iterations
-        for it in range(self.current_learning_iteration, tot_iter):
+        # self.cam_tensor = self.env.gym.get_camera_image_gpu_tensor(self.env.sim, self.env.envs[self.env.num_envs//2], self.camera_handle, gymapi.IMAGE_COLOR)
+        # self.torch_cam_tensor = gymtorch.wrap_tensor(self.cam_tensor)
+
+        tot_iter = self.current_learning_iteration + num_learning_iterations+1
+        for it in range(self.current_learning_iteration+1, tot_iter):
+            self.current_learning_iteration = it
             start = time.time()
             # Rollout
             with torch.inference_mode():
@@ -147,12 +153,13 @@ class OnPolicyRunner:
             if self.log_dir is not None:
                 self.log(locals())
             if it % self.save_interval == 0:
-                self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
+                self.save(os.path.join(self.log_dir, f'model_{it}.pt'))
+                self.env.save_video(os.path.join(self.log_dir, f'model_{it}.mp4'))
             ep_infos.clear()
             ep_metrics.clear()
         
-        self.current_learning_iteration += num_learning_iterations
-        self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
+        # self.current_learning_iteration += num_learning_iterations
+        # self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
 
     def log(self, locs, width=80, pad=35):
         self.tot_timesteps += self.num_steps_per_env * self.env.num_envs

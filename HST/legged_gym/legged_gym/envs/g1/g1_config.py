@@ -30,34 +30,34 @@
 
 from legged_gym.envs.base.base_config import BaseConfig
 
-class H1RoughCfg( BaseConfig ):
+class G1RoughCfg( BaseConfig ):
     class human:
         delay = 0.0 # delay in seconds
-        freq = 10
+        freq = 20
         resample_on_env_reset = True
-        filename = 'ACCAD_walk_10fps.npy'
-        
+        filename = 'Walking_3_poses_120_jpos.npy'
+        least_time = 3 #至少要学习3秒
     class env:
         num_envs = 2048
-        num_dofs = 19
-        num_observations = 65 + num_dofs  # TODO
+        num_dofs = 29
+        num_observations = 136 # TODO
         num_privileged_obs = None # if not None a priviledge_obs_buf will be returned by step() (critic obs for assymetric training). None is returned otherwise 
-        num_actions = 19
+        num_actions = 23
         env_spacing = 3.  # not used with heightfields/trimeshes 
         send_timeouts = True # send time out information to the algorithm
         episode_length_s = 20 # episode length in seconds
 
         action_delay = 1  # -1 for no delay
-        obs_context_len = 8
+        obs_context_len = 6
 
     class terrain:
-        mesh_type = "trimesh" # none, plane, heightfield or trimesh
+        mesh_type = "plane" # none, plane, heightfield or trimesh
         horizontal_scale = 0.1 # [m]
         vertical_scale = 0.005 # [m]
         border_size = 25 # [m]
         curriculum = False
         static_friction = 1.0
-        dynamic_friction = 1.0
+        dynamic_friction = 0.8
         restitution = 0.
         # rough terrain only:
         measure_heights = False
@@ -78,68 +78,102 @@ class H1RoughCfg( BaseConfig ):
     class commands:
         curriculum = False
         max_curriculum = 1.
-        num_commands = 4 # default: lin_vel_x, lin_vel_y, ang_vel_yaw, heading (in heading mode ang_vel_yaw is recomputed from heading error)
+        num_commands = 18 # default: lin_vel_x, lin_vel_y, ang_vel_yaw, heading (in heading mode ang_vel_yaw is recomputed from heading error)
         resampling_time = 10. # time before command are changed[s]
-        heading_command = True # if true: compute ang vel command from heading error
+        command_type = 'vel_ang' #'heading', 'vel_ang','target'
         class ranges:
-            lin_vel_x = [0.9, 0.9] # min max [m/s]
+            lin_vel_x = [0.0, 0.0] # min max [m/s]
             lin_vel_y = [0, 0]   # min max [m/s]
             ang_vel_yaw = [0, 0]    # min max [rad/s]
             heading = [0, 0]
 
     class init_state:
-        pos = [0.0, 0.0, 1.05] # x,y,z [m]
+        pos = [0.0, 0.0, 0.793] # x,y,z [m]
         rot = [0.0, 0.0, 0.0, 1.0] # x,y,z,w [quat]
         lin_vel = [0.0, 0.0, 0.0]  # x,y,z [m/s]
         ang_vel = [0.0, 0.0, 0.0]  # x,y,z [rad/s]
-        dof_weights = { # = target angles [rad] when action = 0.0
-            'left_hip_yaw_joint': 1.,
-            'left_hip_roll_joint': 1.,
-            'left_hip_pitch_joint': 1.,
-            'left_knee_joint': 0.5,
-            'left_ankle_joint': 0.1,
-            'right_hip_yaw_joint': 1.0,
-            'right_hip_roll_joint': 1.0,
-            'right_hip_pitch_joint': 1.,
-            'right_knee_joint': 0.5,
-            'right_ankle_joint': 0.1,
-            'torso_joint': 1.,
-            'left_shoulder_pitch_joint': 1.0,
-            'left_shoulder_roll_joint': 1.0,
-            'left_shoulder_yaw_joint': 1.0,
-            'left_elbow_joint': 1.0,
-            'right_shoulder_pitch_joint': 1.0,
-            'right_shoulder_roll_joint': 1.0,
-            'right_shoulder_yaw_joint': 1.0,
-            'right_elbow_joint': 1.0,
+        dof_weights = {
+            'left_hip_pitch_joint':1.0,
+            'left_hip_roll_joint':1.0, 
+            'left_hip_yaw_joint':1.0, 
+            'left_knee_joint':0.5, 
+            'left_ankle_pitch_joint':0.1, 
+            'left_ankle_roll_joint':0.1, 
+            'right_hip_pitch_joint':1.0, 
+            'right_hip_roll_joint':1.0, 
+            'right_hip_yaw_joint':1.0, 
+            'right_knee_joint':0.5, 
+            'right_ankle_pitch_joint':0.1, 
+            'right_ankle_roll_joint':0.1, 
+            'waist_yaw_joint':1.0, 
+            'waist_roll_joint':1.0, 
+            'waist_pitch_joint':1.0, 
+            'left_shoulder_pitch_joint':1.0, 
+            'left_shoulder_roll_joint':1.0, 
+            'left_shoulder_yaw_joint':1.0, 
+            'left_elbow_joint':1.0, 
+            'left_wrist_roll_joint':1.0, 
+            'left_wrist_pitch_joint':1.0, 
+            'left_wrist_yaw_joint':1.0, 
+            'right_shoulder_pitch_joint':1.0, 
+            'right_shoulder_roll_joint':1.0, 
+            'right_shoulder_yaw_joint':1.0, 
+            'right_elbow_joint':1.0, 
+            'right_wrist_roll_joint':1.0, 
+            'right_wrist_pitch_joint':1.0, 
+            'right_wrist_yaw_joint':1.0
         }
+
         default_joint_angles = { # = target angles [rad] when action = 0.0
-            'left_hip_yaw_joint': 0.0,
-            'left_hip_roll_joint': 0.0,
-            'left_hip_pitch_joint': -0.349,
-            'left_knee_joint': 0.698,
-            'left_ankle_joint': -0.349,
-            'right_hip_yaw_joint': 0.0,
-            'right_hip_roll_joint': 0.0,
-            'right_hip_pitch_joint': -0.349,
-            'right_knee_joint': 0.698,
-            'right_ankle_joint': -0.349,
-            'torso_joint': 0.0,
-            'left_shoulder_pitch_joint': 0.0,
-            'left_shoulder_roll_joint': 0.0,
-            'left_shoulder_yaw_joint': 0.0,
-            'left_elbow_joint': 0.0,
-            'right_shoulder_pitch_joint': 0.0,
-            'right_shoulder_roll_joint': 0.0,
-            'right_shoulder_yaw_joint': 0.0,
-            'right_elbow_joint': 0.0,
+            'left_hip_pitch_joint':-0.30,
+            'left_hip_roll_joint':0.0, 
+            'left_hip_yaw_joint':0.0, 
+            'left_knee_joint':0.69, 
+            'left_ankle_pitch_joint':-0.39, 
+            'left_ankle_roll_joint':0.0, 
+            'right_hip_pitch_joint':-0.30, 
+            'right_hip_roll_joint':0.0, 
+            'right_hip_yaw_joint':0.0, 
+            'right_knee_joint':0.69, 
+            'right_ankle_pitch_joint':-0.39, 
+            'right_ankle_roll_joint':0.0, 
+            'waist_yaw_joint':0.0, 
+            'waist_roll_joint':0.0, 
+            'waist_pitch_joint':0.0, 
+            'left_shoulder_pitch_joint':0.05, 
+            'left_shoulder_roll_joint':0.16, 
+            'left_shoulder_yaw_joint':-0.3, 
+            'left_elbow_joint':0.80, 
+            'left_wrist_roll_joint':0.0, 
+            'left_wrist_pitch_joint':0.0, 
+            'left_wrist_yaw_joint':0.0, 
+            'right_shoulder_pitch_joint':0.05, 
+            'right_shoulder_roll_joint':-0.16, 
+            'right_shoulder_yaw_joint':0.3, 
+            'right_elbow_joint':0.80, 
+            'right_wrist_roll_joint':0.0, 
+            'right_wrist_pitch_joint':0.0, 
+            'right_wrist_yaw_joint':0.0
         }
 
     class control:
         control_type = 'P'
         # PD Drive parameters:
-        stiffness = {'joint': 100.}  # [N*m/rad]
-        damping = {'joint': 5.}     # [N*m*s/rad]
+        stiffness = {'default': 100.,
+                    'hip_yaw_joint':150.,
+                    "hip_roll_joint": 150.0,
+                    "hip_pitch_joint": 200.0,
+                    "knee_joint": 200.0,
+                    "waist_pitch_joint": 200.0,
+                    "_ankle_": 40.,
+                    "_shoulder_": 40.,
+                    "_elbow_": 40.
+                     }  # [N*m/rad]
+        damping = {'default': 5.,
+                   "_ankle_": 2.,
+                   "_shoulder_": 10.,
+                    "_elbow_": 10.
+                   }     # [N*m*s/rad]
         # action scale: target angle = actionScale * action + defaultAngle
         action_scale = 1
         clip_actions = True
@@ -147,11 +181,14 @@ class H1RoughCfg( BaseConfig ):
         decimation = 4
         
     class asset:
-        file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/h1/urdf/h1.urdf'
-        name = "h1"
-        foot_name = 'ankle'
-        penalize_contacts_on = []
-        terminate_after_contacts_on = ['pelvis', 'hip', 'shoulder', 'elbow', 'knee']
+        file = '/home/fleaven/robot/unitree_ros/robots/g1_description/g1_29dof_rev_1_0.urdf'
+        arrow=''
+        name = "g1"
+        foot_name = '_ankle_roll_link'
+        penalize_contacts_on = ["elbow"]
+        terminate_after_contacts_on = []
+        target_pos = ['left_ankle_pitch_link','right_ankle_pitch_link','left_wrist_yaw_link','right_wrist_yaw_link']
+        exclude_dof = ["wrist"]
         disable_gravity = False
         collapse_fixed_joints = True # merge bodies connected by fixed joints. Specific fixed joints can be kept by adding " <... dont_collapse="true">
         fix_base_link = False # fixe the base of the robot
@@ -165,16 +202,16 @@ class H1RoughCfg( BaseConfig ):
         linear_damping = 0.
         max_angular_velocity = 1000.
         max_linear_velocity = 1000.
-        armature = 0.
+        armature = 0.01
         thickness = 0.01
 
     class domain_rand:
         drop_target=True
         randomize_friction = True
-        friction_range = [0.0, 2.0]
+        friction_range = [0.3, 5.0]
         randomize_base_mass = True
         added_mass_range = [-1., 1.]
-        push_robots = True
+        push_robots = False
         push_interval_s = 15
         max_push_vel_xy = 1.
         motion_package_loss=False
@@ -182,36 +219,39 @@ class H1RoughCfg( BaseConfig ):
 
     class rewards:
         class scales:
-            termination = -0.0
-            tracking_lin_vel = 0.1
-            tracking_ang_vel = 0.1
+            termination = -1
+            tracking_lin_vel = 1
+            tracking_ang_vel = 1
             lin_vel_z = -0
             ang_vel_xy = -0
             orientation = -0.
-            torques = -0.000001
-            dof_vel = -0.
-            dof_acc = -2.5e-8
-            base_height = -0. 
-            feet_air_time = 0.1
-            collision = -0.1
+            torques = 0.0
+            torques_limit = 0.1
+            dof_vel = 0.001
+            dof_acc = 0.0
+            feet_air_time = 0.
+            collision = 1
             feet_stumble = -0.0 
-            action_rate = -0.001
-            stand_still = -0.
+            action_rate = 0.0
+            stand_still = 1
             dof_pos_limits = -0.0
-            target_jt = 1
+            target_jt = 0
+            target_vel = -0.00
+            feet_slide = -1
+            height = -0.01
+            torso_stable = 0.1
 
         only_positive_rewards = True # if true negative total rewards are clipped at zero (avoids early termination problems)
         tracking_sigma = 0.25 # tracking reward = exp(-error^2/sigma)
         soft_dof_pos_limit = 1. # percentage of urdf limits, values above this limit are penalized
         soft_dof_vel_limit = 1.
         soft_torque_limit = 1.
-        base_height_target = 1.
         max_contact_force = 100. # forces above this value are penalized
 
     class termination:
-        r_threshold = 0.5
-        p_threshold = 0.5
-        z_threshold = 0.85
+        r_threshold = 0.7
+        p_threshold = 0.7
+        z_threshold = 0.3
 
     class normalization:
         class obs_scales:
@@ -220,14 +260,18 @@ class H1RoughCfg( BaseConfig ):
             orn = 1.0
             dof_pos = 1.0
             dof_vel = 0.05
+            lin_acc = 0.2
             height_measurements = 5.0
-        commands_scale = [1., 1., 1., 1.]
+        commands_scale = [1., 1., 1., 1., 1.0, 1.0,
+                          1., 1., 1., 1., 1.0, 1.0,
+                          1., 1., 1., 1., 1.0, 1.0]
         # clip_observations = 100.
         # clip_actions = 100.
 
     class noise:
         add_noise = True
-        noise_level = 1.0 # scales other values
+        noise_level = 0.1 # scales other values
+        noise_ratio = 0.002
         class noise_scales:
             dof_pos = 0.02
             dof_vel = 0.05
@@ -242,6 +286,8 @@ class H1RoughCfg( BaseConfig ):
         ref_env = 0
         pos = [10, 0, 6]  # [m]
         lookat = [11., 5, 3.]  # [m]
+        video = True
+        video_len = 10.
 
     class sim:
         dt =  0.005
@@ -263,7 +309,7 @@ class H1RoughCfg( BaseConfig ):
             contact_collection = 2 # 0: never, 1: last sub-step, 2: all sub-steps (default=2)
 
 
-class H1RoughCfgPPO(BaseConfig):
+class G1RoughCfgPPO(BaseConfig):
     seed = 1
     runner_class_name = 'OnPolicyRunner'
     class policy:
@@ -282,9 +328,9 @@ class H1RoughCfgPPO(BaseConfig):
         use_clipped_value_loss = True
         clip_param = 0.2
         entropy_coef = 1e-5
-        num_learning_epochs = 2
+        num_learning_epochs = 4
         num_mini_batches = 4 # mini batch size = num_envs*nsteps / nminibatches
-        learning_rate = 1.e-4
+        learning_rate = 1.e-5
         schedule = 'fixed' # could be adaptive, fixed
         gamma = 0.99
         lam = 0.95
@@ -298,11 +344,11 @@ class H1RoughCfgPPO(BaseConfig):
         max_iterations = 15000 # number of policy updates
 
         # logging
-        save_interval = 1000 # check for potential saves every this many iterations
-        experiment_name = 'rough_h1'
+        save_interval = 500 # check for potential saves every this many iterations
+        experiment_name = 'rough_g1'
         run_name = None
         # load and resume
-        resume = False
+        resume = True
         load_run = -1 # -1 = last run
         checkpoint = -1 # -1 = last saved model
         resume_path = None # updated from load_run and chkpt

@@ -100,7 +100,7 @@ def parse_sim_params(args, cfg):
 
     return sim_params
 
-def get_load_path(root, load_run=-1, checkpoint=-1):
+def get_load_path(root, load_run='', checkpoint=-1):
     try:
         runs = os.listdir(root)
         #TODO sort by date to handle change of month
@@ -109,13 +109,13 @@ def get_load_path(root, load_run=-1, checkpoint=-1):
         last_run = os.path.join(root, runs[-1])
     except:
         raise ValueError("No runs in this directory: " + root)
-    if load_run==-1:
+    if load_run=='':
         load_run = last_run
     else:
         load_run = os.path.join(root, load_run)
 
-    if checkpoint==-1:
-        models = [file for file in os.listdir(load_run) if 'model' in file]
+    if checkpoint=='-1':
+        models = [file for file in os.listdir(load_run) if '.pt' in file]
         models.sort(key=lambda m: '{0:0>15}'.format(m))
         model = models[-1]
     else:
@@ -153,7 +153,7 @@ def get_args(test=False):
         {"name": "--experiment_name", "type": str,  "help": "Name of the experiment to run or load. Overrides config file if provided."},
         {"name": "--run_name", "type": str,  "required": True if not test else False,  "help": "Name of the run. Overrides config file if provided."},
         {"name": "--load_run", "type": str, "default": "", "help": "Name of the run to load when resume=True. If -1: will load the last run. Overrides config file if provided."},
-        {"name": "--checkpoint", "type": int,"default": "-1",  "help": "Saved model checkpoint number. If -1: will load the last checkpoint. Overrides config file if provided."},
+        {"name": "--checkpoint", "type": str,"default": "-1",  "help": "Saved model checkpoint number. If -1: will load the last checkpoint. Overrides config file if provided."},
 
         {"name": "--headless", "action": "store_true", "default": True, "help": "Force display off at all times"},
         {"name": "--rl_device", "type": str, "default": "cuda:0", "help": 'Device used by the RL algorithm, (cpu, gpu, cuda:0, cuda:1 etc..)'},

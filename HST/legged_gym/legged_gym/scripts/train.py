@@ -28,20 +28,20 @@
 #
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
-import numpy as np
+
 import os
 from datetime import datetime
 
-import isaacgym
 from legged_gym.envs import *
 from legged_gym.utils import get_args, task_registry
-import torch
 import wandb
+import numpy as np
 
 def train(args):
-    wandb.init(project='humanoid', name=args.run_name, entity="zfu")
-    wandb.save(LEGGED_GYM_ENVS_DIR + "/h1/h1_config.py", policy="now")
-    wandb.save(LEGGED_GYM_ENVS_DIR + "/h1/h1.py", policy="now")
+    run_id = wandb.util.generate_id()
+    wandb.init(name=args.run_name, id=run_id,dir="/home/fleaven/robot/humanplus/HST/g1/logs", sync_tensorboard=True)
+    wandb.save("/home/fleaven/robot/humanplus/HST/legged_gym/legged_gym/envs/g1/g1_config.py", policy="now")
+    wandb.save("/home/fleaven/robot/humanplus/HST/legged_gym/legged_gym/envs/g1/g1.py", policy="now")
     # wandb.save(LEGGED_GYM_ROOT_DIR + "../rsl_rl/modules/actor_critic.py", policy="now")
     # wandb.save(LEGGED_GYM_ROOT_DIR + "../rsl_rl/algorithms/ppo.py", policy="now")
     # wandb.save(LEGGED_GYM_ROOT_DIR + "../rsl_rl/runners/on_policy_runner.py", policy="now")

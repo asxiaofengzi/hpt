@@ -46,17 +46,181 @@ from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.utils.terrain import Terrain
 from legged_gym.utils.math import quat_apply_yaw, wrap_to_pi, torch_rand_sqrt_float, euler_from_quat
 from legged_gym.utils.helpers import class_to_dict
-from legged_gym.utils.human import load_target_jt
-from .h1_config import H1RoughCfg
+from legged_gym.utils.human import load_target_jt_new
+from .g1_config import G1RoughCfg
 import IPython; e = IPython.embed
+
+
+import torch
+
+def quaternion_to_angular_velocity(R0, R1, delta_t):
+    """
+    Compute angular velocity from two quaternions and time difference.
+    
+    Parameters:
+    R0 (torch.Tensor): Quaternion at time t0 (shape: [4]).
+    R1 (torch.Tensor): Quaternion at time t1 (shape: [4]).
+    delta_t (float): Time interval between t0 and t1.
+    
+    Returns:
+    torch.Tensor: Angular velocity vector (shape: [3]).
+    """
+    # Ensure the quaternions are normalized
+    # R0 = R0 / R0.norm(dim=-1)
+    # R1 = R1 / R1.norm(dim=-1)
+    
+    # Compute relative quaternion: Δq = R1 * conj(R0)
+    R0_conj = -R0
+    R0_conj[:,3] = R0[:,3]
+    delta_q = R0.clone()
+    
+    delta_q[:,0] = R1[:,3] * R0_conj[:,0] + R1[:,0] * R0_conj[:,3] + R1[:,1] * R0_conj[:,2] - R1[:,2] * R0_conj[:,1]
+    delta_q[:,1] = R1[:,3] * R0_conj[:,1] - R1[:,0] * R0_conj[:,2] + R1[:,1] * R0_conj[:,3] + R1[:,2] * R0_conj[:,0]
+    delta_q[:,2] = R1[:,3] * R0_conj[:,2] + R1[:,0] * R0_conj[:,1] - R1[:,1] * R0_conj[:,0] + R1[:,2] * R0_conj[:,3]
+    delta_q[:,3] = R1[:,3] * R0_conj[:,3] - R1[:,0] * R0_conj[:,0] - R1[:,1] * R0_conj[:,1] - R1[:,2] * R0_conj[:,2]
+    
+    # Extract the imaginary part (x, y, z) and normalize
+    delta_q_imag = delta_q[:,:3]  # Extract imaginary components
+    angular_velocity = 2 * delta_q_imag / delta_t
+    
+    return angular_velocity
+
 
 def sample_int_from_float(x):
     if int(x) == x:
         return int(x)
     return int(x)+1 if np.random.rand() < (x - int(x)) else int(x)
 
-class H1():
-    def __init__(self, cfg: H1RoughCfg, sim_params, physics_engine, sim_device, headless):
+def create_wireframe_cone_geometry(radius=1.0, height=1.0, num_segments=16):
+    """
+    创建线框圆锥体的顶点和线段
+    
+    参数:
+        radius (float): 底面圆的半径
+        height (float): 圆锥体的高度
+        num_segments (int): 底面圆的分段数
+        
+    返回:
+        vertices (list): 顶点列表
+        lines (list): 线段索引列表
+    """
+    import math
+    
+    vertices = []
+    lines = []
+    
+    # 添加顶点
+    # 圆锥顶点
+    vertices.append([0, height, 0])
+    
+    # 底面圆的顶点
+    for i in range(num_segments):
+        angle = 2.0 * math.pi * i / num_segments
+        x = radius * math.cos(angle)
+        z = radius * math.sin(angle)
+        vertices.append([x, 0, z])
+    
+    # 添加线段
+    # 从顶点到底面的线段
+    for i in range(num_segments):
+        lines.append([0, i + 1])  # 顶点(索引0)到底面顶点的连线
+    
+    # 底面圆的线段
+    for i in range(num_segments):
+        lines.append([i + 1, ((i + 1) % num_segments) + 1])
+    
+    return vertices, lines
+
+def create_visual_wireframe_cone(gym, env, pose, radius=1.0, height=1.0, num_segments=16, color=(1, 1, 1)):
+    """
+    在Isaac Gym中创建并显示线框圆锥体
+    
+    参数:
+        gym: Isaac Gym实例
+        env: 环境实例
+        pose: 圆锥体的位姿
+        radius (float): 底面圆的半径
+        height (float): 圆锥体的高度
+        num_segments (int): 底面圆的分段数
+        color (tuple): RGB颜色值 (0-1范围)
+    """
+    vertices, lines = create_wireframe_cone_geometry(radius, height, num_segments)
+    
+    # 创建可视化对象
+    for line in lines:
+        start = vertices[line[0]]
+        end = vertices[line[1]]
+        
+        # 应用位姿变换
+        start_transformed = [
+            start[0] + pose.p.x,
+            start[1] + pose.p.y,
+            start[2] + pose.p.z
+        ]
+        end_transformed = [
+            end[0] + pose.p.x,
+            end[1] + pose.p.y,
+            end[2] + pose.p.z
+        ]
+        
+        # 使用gym.add_lines()添加线段
+        gym.add_lines(env, start_transformed, end_transformed, color)
+
+# 使用示例:
+"""
+# 在你的Isaac Gym代码中使用:
+from isaacgym import gymapi
+
+gym = gymapi.acquire_gym()
+# ... 创建环境等其他设置 ...
+
+# 创建一个位姿
+pose = gymapi.Transform()
+pose.p = gymapi.Vec3(0.0, 0.0, 0.0)  # 位置
+pose.r = gymapi.Quat(0.0, 0.0, 0.0, 1.0)  # 旋转
+
+# 创建线框圆锥体
+create_visual_wireframe_cone(
+    gym=gym,
+    env=env,
+    pose=pose,
+    radius=0.5,
+    height=1.0,
+    num_segments=16,
+    color=(1, 0, 0)  # 红色
+)
+"""
+
+def create_arrow(gym, sim, env, base_position, arrow_length=1.0, arrow_radius=0.05):
+    """
+    Create an arrow using a cylinder and a cone in Isaac Gym.
+    
+    Parameters:
+    gym (gymapi.Gym): Isaac Gym instance.
+    sim (gymapi.Sim): Simulation instance.
+    env (gymapi.Env): Environment instance.
+    base_position (list or np.array): [x, y, z] position of the arrow base.
+    arrow_length (float): Total length of the arrow.
+    arrow_radius (float): Radius of the arrow's shaft.
+    
+    Returns:
+    arrow_handles: A tuple of actor handles (cylinder, cone).
+    """
+    # Create cone (tip of the arrow)
+    cone_options = gymapi.AssetOptions()
+    cone = gym.create_capsule(sim, arrow_radius, arrow_length, cone_options)
+
+    # Position the cone
+    cone_pose = gymapi.Transform()
+    cone_pose.p = gymapi.Vec3(base_position[0], base_position[1], base_position[2] + arrow_length * 0.9)
+
+    # Create the cylinder and cone actors in the environment
+    cone_handle = gym.create_actor(env, cone, cone_pose, "cone", -1, 0)
+
+    return cone_handle
+
+class G1():
+    def __init__(self, cfg: G1RoughCfg, sim_params, physics_engine, sim_device, headless):
         """ Parses the provided config file,
             calls create_sim() (which creates, simulation, terrain and environments),
             initilizes pytorch buffers used during training
@@ -72,7 +236,7 @@ class H1():
         self.cfg = cfg
         self.sim_params = sim_params
         self.height_samples = None
-        self.debug_viz = False
+        self.debug_viz = True
         self.init_done = False
         self._parse_cfg(self.cfg)
         self._super_init(self.cfg, sim_params, physics_engine, sim_device, headless)
@@ -84,7 +248,6 @@ class H1():
         
         # human retargeted poses
         self._init_target_jt()
-
         self.init_done = True
     
     def _super_init(self, cfg, sim_params, physics_engine, sim_device, headless):
@@ -160,38 +323,48 @@ class H1():
 
 
     def _init_target_jt(self):
-        self.target_jt_seq, self.target_jt_seq_len = load_target_jt(self.device, self.cfg.human.filename, self.default_dof_pos)
-        self.num_target_jt_seq, self.max_target_jt_seq_len, self.dim_target_jt = self.target_jt_seq.shape
+        self.target_jt_seq, self.target_jt_seq_len = load_target_jt_new(self.device, self.cfg.human.filename, self.default_dof_pos, self.cfg.human.freq)
+        self.num_target_jt_seq, self.max_target_jt_seq_len, _ = self.target_jt_seq.shape
         print(f"Loaded target joint trajectories of shape {self.target_jt_seq.shape}")
-        assert(self.dim_target_jt == self.num_dofs)
-        self.target_jt_i = torch.randint(0, self.num_target_jt_seq, (self.num_envs,), device=self.device)
-        self.target_jt_j = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.target_jt_dt = 1 / self.cfg.human.freq
         self.target_jt_update_steps = self.target_jt_dt / self.dt # not necessary integer
         assert(self.dt <= self.target_jt_dt)
+        self.target_jt_i = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.target_jt_j = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.target_jt_update_steps_int = sample_int_from_float(self.target_jt_update_steps)
-        self.target_jt = None
         self.delayed_obs_target_jt = None
         self.delayed_obs_target_jt_steps = self.cfg.human.delay / self.target_jt_dt
         self.delayed_obs_target_jt_steps_int = sample_int_from_float(self.delayed_obs_target_jt_steps)
-        self.update_target_jt(torch.tensor([], dtype=torch.long, device=self.device))
+        self._reset_jt(torch.arange(self.num_envs, device=self.device))
 
 
-    def update_target_jt(self, reset_env_ids):
+
+    def update_target_jt(self):
         self.target_jt = self.target_jt_seq[self.target_jt_i, self.target_jt_j]
-        self.delayed_obs_target_jt = self.target_jt_seq[self.target_jt_i, torch.maximum(self.target_jt_j - self.delayed_obs_target_jt_steps_int, torch.tensor(0))]
-        resample_i = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
-        if self.common_step_counter % self.target_jt_update_steps_int == 0:
+        self.target_jt_next = self.target_jt_seq[self.target_jt_i, self.target_jt_j+1]
+        body_idx=[7,8,20,21]
+        self.target_bp = self.target_jt[:,36:].view(self.num_envs,-1,3)[:,body_idx]
+        self.target_bp_next = self.target_jt_next[:,36:].view(self.num_envs,-1,3)[:,body_idx]
+        self.delayed_obs_target_jt = self.target_jt_seq[self.target_jt_i, torch.maximum(self.target_jt_j - self.delayed_obs_target_jt_steps_int, torch.tensor(0)),7:36]
+        self._reset_dofs(torch.arange(self.num_envs, device=self.device))
+        self._reset_root_states(torch.arange(self.num_envs, device=self.device))
+        if self.cfg.commands.command_type=='target':
+            base_quat = self.target_jt[:, 3:7]
+            lin_vel = (self.target_jt_next[:,:3] - self.target_jt[:,:3])*self.cfg.human.freq
+            ang_vel = quaternion_to_angular_velocity(self.target_jt[:,3:7],self.target_jt_next[:,3:7],  1/self.cfg.human.freq)
+            body_pos = self.body_pos[:,self.target_pos_idx] - self.root_states[:,:3].unsqueeze(1)
+            for i in range(body_pos.shape[1]):
+                body_pos[:,i] = quat_rotate_inverse(self.root_states[:,3:7], body_pos[:,i])
+            body_vel = (self.target_bp - body_pos)*(self.cfg.human.freq*4)
+            vel_norm = body_vel.norm(dim=-1) + 1e-6 #防止除零
+            body_vel = body_vel/vel_norm.sqrt().unsqueeze(-1)
+            
+            self.commands[:,:3] = quat_rotate_inverse(base_quat, lin_vel)
+            self.commands[:,3:6] = quat_rotate_inverse(base_quat, ang_vel)
+            self.commands[:,6:] = body_vel.view(-1,12)
+
+        if (self.common_step_counter +1)% self.target_jt_update_steps_int == 0:
             self.target_jt_j += 1
-            jt_eps_end_bool = self.target_jt_j >= self.target_jt_seq_len
-            self.target_jt_j = torch.where(jt_eps_end_bool, torch.zeros_like(self.target_jt_j), self.target_jt_j)
-            resample_i[jt_eps_end_bool.nonzero(as_tuple=False).flatten()] = True
-            self.target_jt_update_steps_int = sample_int_from_float(self.target_jt_update_steps)
-            self.delayed_obs_target_jt_steps_int = sample_int_from_float(self.delayed_obs_target_jt_steps)
-        if self.cfg.human.resample_on_env_reset:
-            self.target_jt_j[reset_env_ids] = 0
-            resample_i[reset_env_ids] = True
-        self.target_jt_i = torch.where(resample_i, torch.randint(0, self.num_target_jt_seq, (self.num_envs,), device=self.device), self.target_jt_i)
 
 
     def step(self, actions):
@@ -215,6 +388,7 @@ class H1():
                 self.gym.fetch_results(self.sim, True)
             self.gym.refresh_dof_state_tensor(self.sim)
         self.post_physics_step()
+        #time.sleep(0.001)
 
         # return clipped obs, clipped states (None), rewards, dones and infos
         # clip_obs = self.cfg.normalization.clip_observations
@@ -231,7 +405,8 @@ class H1():
         """
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
-
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
+        
         self.episode_length_buf += 1
         self.common_step_counter += 1
 
@@ -249,9 +424,8 @@ class H1():
         self.compute_reward()
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         self.reset_idx(env_ids)
-        self.update_target_jt(env_ids)
         self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
-
+        self.update_target_jt()
         self.last_actions[:] = self.actions[:]
         self.last_dof_vel[:] = self.dof_vel[:]
         self.last_root_vel[:] = self.root_states[:, 7:13]
@@ -271,13 +445,15 @@ class H1():
         p_threshold_buff = p.abs() > self.cfg.termination.p_threshold
         z_threshold_buff = z < self.cfg.termination.z_threshold
         
-        self.time_out_buf = self.episode_length_buf > self.max_episode_length # no terminal reward for time-outs
+        self.time_out_buf = ((self.episode_length_buf > self.max_episode_length) | (self.target_jt_j >= self.target_jt_seq_len-2)) # no terminal reward for time-outs
 
         # self.reset_triggers = torch.stack([termination_contact_buf, r_threshold_buff, p_threshold_buff, z_threshold_buff, self.time_out_buf], dim=-1).nonzero(as_tuple=False)
         # if len(self.reset_triggers) > 0:
         #     print('reset_triggers: ', self.reset_triggers)
 
         self.reset_buf = termination_contact_buf | r_threshold_buff | p_threshold_buff | z_threshold_buff | self.time_out_buf
+        # if self.reset_buf.sum() > 0:
+        #     print("! reset")
     
 
     def reset(self):
@@ -306,6 +482,7 @@ class H1():
             self.update_command_curriculum(env_ids)
         
         # reset robot states
+        self._reset_jt(env_ids)
         self._reset_dofs(env_ids)
         self._reset_root_states(env_ids)
 
@@ -361,7 +538,7 @@ class H1():
         """
         self.obs_buf = torch.cat((  self.base_orn_rp * self.obs_scales.orn,  # [0:2]
                                     self.base_ang_vel * self.obs_scales.ang_vel,  # [2:5]
-                                    self.commands[:, :3] * self.commands_scale[:3],  # [5:8]
+                                    self.commands * self.commands_scale,  # [5:8]
                                     (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,  # [8:8+num_dofs]
                                     self.dof_vel * self.obs_scales.dof_vel,  # [8+num_dofs:8+2*num_dofs]
                                     self.actions,  # [8+2*num_dofs:8+3*num_dofs]
@@ -491,7 +668,7 @@ class H1():
         # 
         env_ids = (self.episode_length_buf % int(self.cfg.commands.resampling_time / self.dt)==0).nonzero(as_tuple=False).flatten()
         self._resample_commands(env_ids)
-        if self.cfg.commands.heading_command:
+        if self.cfg.commands.command_type == 'heading':
             forward = quat_apply(self.base_quat, self.forward_vec)
             heading = torch.atan2(forward[:, 1], forward[:, 0])
             self.commands[:, 2] = torch.clip(0.5*wrap_to_pi(self.commands[:, 3] - heading), -1., 1.)
@@ -507,16 +684,19 @@ class H1():
         Args:
             env_ids (List[int]): Environments ids for which new commands are needed
         """
-        self.commands[env_ids, 0] = torch_rand_float(self.command_ranges["lin_vel_x"][0], self.command_ranges["lin_vel_x"][1], (len(env_ids), 1), device=self.device).squeeze(1)
-        self.commands[env_ids, 1] = torch_rand_float(self.command_ranges["lin_vel_y"][0], self.command_ranges["lin_vel_y"][1], (len(env_ids), 1), device=self.device).squeeze(1)
-        if self.cfg.commands.heading_command:
+        if self.cfg.commands.command_type == 'heading':
+            self.commands[env_ids, 0] = torch_rand_float(self.command_ranges["lin_vel_x"][0], self.command_ranges["lin_vel_x"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+            self.commands[env_ids, 1] = torch_rand_float(self.command_ranges["lin_vel_y"][0], self.command_ranges["lin_vel_y"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+            self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
             self.commands[env_ids, 3] = torch_rand_float(self.command_ranges["heading"][0], self.command_ranges["heading"][1], (len(env_ids), 1), device=self.device).squeeze(1)
-        else:
+            # set small commands to zero
+        elif self.cfg.commands.command_type == 'vel_ang':
+            self.commands[env_ids, 0] = torch_rand_float(self.command_ranges["lin_vel_x"][0], self.command_ranges["lin_vel_x"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+            self.commands[env_ids, 1] = torch_rand_float(self.command_ranges["lin_vel_y"][0], self.command_ranges["lin_vel_y"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+            self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
             self.commands[env_ids, 2] = torch_rand_float(self.command_ranges["ang_vel_yaw"][0], self.command_ranges["ang_vel_yaw"][1], (len(env_ids), 1), device=self.device).squeeze(1)
-
-        # set small commands to zero
-        self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)
-
+            
+        
     def _compute_torques(self, actions):
         """ Compute torques from actions.
             Actions can be interpreted as position or velocity targets given to a PD controller, or directly as scaled torques.
@@ -541,16 +721,28 @@ class H1():
         elif control_type=="T":
             torques = actions_scaled
         elif control_type=='C':
-            target_dof_pos = self.target_jt
+            target_dof_pos = self.target_jt[7:36]
             if self.cfg.control.clip_actions:
                 target_dof_pos = torch.clip(target_dof_pos, self.dof_pos_limits[:, 0], self.dof_pos_limits[:, 1])
             torques = self.p_gains*(target_dof_pos - self.dof_pos + actions_scaled) - self.d_gains*self.dof_vel
         else:
             raise NameError(f"Unknown controller type: {control_type}")
-        
         ret = torch.clip(self.last_torques, -self.torque_limits, self.torque_limits)
         self.last_torques = torques #delay
         return ret
+
+
+
+
+
+    def _reset_jt(self, env_ids):
+        self.target_jt_i[env_ids] = torch.randint(0, self.num_target_jt_seq, (env_ids.shape[0],), device=self.device)
+        self.target_jt_j[env_ids] = torch.randint(0,self.target_jt_seq_len - self.cfg.human.least_time*self.cfg.human.freq, (env_ids.shape[0],), dtype=torch.long, device=self.device)
+        self.update_target_jt()
+        
+        #self.target_jt[env_ids] = self.target_jt_seq[self.target_jt_i[env_ids], self.target_jt_j[env_ids]]
+        #self.target_jt_j[env_ids] = torch.randint(0,1, (env_ids.shape[0],), dtype=torch.long, device=self.device)
+
 
     def _reset_dofs(self, env_ids):
         """ Resets DOF position and velocities of selected environmments
@@ -560,8 +752,8 @@ class H1():
         Args:
             env_ids (List[int]): Environemnt ids
         """
-        self.dof_pos[env_ids] = self.default_dof_pos * torch_rand_float(0.5, 1.5, (len(env_ids), self.num_dofs), device=self.device)
-        self.dof_vel[env_ids] = 0.
+        self.dof_pos[env_ids] = self.target_jt[env_ids,7:36]
+        self.dof_vel[env_ids] = (self.target_jt_next[env_ids, 7:36] - self.target_jt[env_ids, 7:36]) * self.cfg.human.freq
 
         env_ids_int32 = env_ids.to(dtype=torch.int32)
         self.gym.set_dof_state_tensor_indexed(self.sim,
@@ -584,7 +776,11 @@ class H1():
             self.root_states[env_ids] = self.base_init_state
             self.root_states[env_ids, :3] += self.env_origins[env_ids]
         # base velocities
-        self.root_states[env_ids, 7:13] = torch_rand_float(-0.5, 0.5, (len(env_ids), 6), device=self.device) # [7:10]: lin vel, [10:13]: ang vel
+        #self.root_states[env_ids, 7:13] = torch_rand_float(-0.5, 0.5, (len(env_ids), 6), device=self.device) # [7:10]: lin vel, [10:13]: ang vel
+        self.root_states[env_ids, :3] += self.target_jt[env_ids,:3]
+        self.root_states[env_ids, 3:7] = self.target_jt[env_ids,3:7]
+        self.root_states[env_ids, 7:10] = (self.target_jt_next[env_ids,:3] - self.target_jt[env_ids,:3])*self.cfg.human.freq
+        self.root_states[env_ids, 10:13] = quaternion_to_angular_velocity(self.target_jt[env_ids,3:7],self.target_jt_next[env_ids,3:7],  1/self.cfg.human.freq) #dq/dt = 1/2*w*q
         env_ids_int32 = env_ids.to(dtype=torch.int32)
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                      gymtorch.unwrap_tensor(self.root_states),
@@ -594,7 +790,7 @@ class H1():
         """ Random pushes the robots. Emulates an impulse by setting a randomized base velocity. 
         """
         max_vel = self.cfg.domain_rand.max_push_vel_xy
-        self.root_states[:, 7:9] = torch_rand_float(-max_vel, max_vel, (self.num_envs, 2), device=self.device) # lin vel x/y
+        self.root_states[:, 7:9] += torch_rand_float(-max_vel, max_vel, (self.num_envs, 2), device=self.device) # lin vel x/y
         self.gym.set_actor_root_state_tensor(self.sim, gymtorch.unwrap_tensor(self.root_states))
 
     def _update_terrain_curriculum(self, env_ids):
@@ -646,10 +842,10 @@ class H1():
         noise_level = self.cfg.noise.noise_level
         noise_vec[0:2] = noise_scales.orn * noise_level * self.obs_scales.orn
         noise_vec[2:5] = noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel
-        noise_vec[5:8] = 0. # commands
-        noise_vec[8: 8 + self.num_dofs] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
-        noise_vec[8 + self.num_dofs: 8 + 2 * self.num_dofs] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
-        noise_vec[8 + 2 * self.num_dofs: 8 + 3 * self.num_dofs] = 0 # previous actions
+        noise_vec[5:23] = 0. # commands
+        noise_vec[23: 23 + self.num_dofs] = noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos
+        noise_vec[23 + self.num_dofs: 23 + 2 * self.num_dofs] = noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel
+        noise_vec[23 + 2 * self.num_dofs: 23 + 3 * self.num_dofs] = 0 # previous actions
         if self.cfg.terrain.measure_heights:
             noise_vec[-self.terrain.num_height_points:] = noise_scales.height_measurements* noise_level * self.obs_scales.height_measurements
         return noise_vec
@@ -662,15 +858,20 @@ class H1():
         actor_root_state = self.gym.acquire_actor_root_state_tensor(self.sim)
         dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim)
         net_contact_forces = self.gym.acquire_net_contact_force_tensor(self.sim)
+        body_state = self.gym.acquire_rigid_body_state_tensor(self.sim) #p,o,v,a
         self.gym.refresh_dof_state_tensor(self.sim)
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
 
         # create some wrapper tensors for different slices
         self.root_states = gymtorch.wrap_tensor(actor_root_state)
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
+        self.body_state = gymtorch.wrap_tensor(body_state)
         self.dof_pos = self.dof_state.view(self.num_envs, self.num_dofs, 2)[..., 0]
         self.dof_vel = self.dof_state.view(self.num_envs, self.num_dofs, 2)[..., 1]
+        self.body_pos = self.body_state.view(self.num_envs, self.num_bodies, -1)[...,:3]
+        self.body_vel = self.body_state.view(self.num_envs, self.num_bodies, -1)[...,7:10]
         self.base_quat = self.root_states[:, 3:7]
 
         self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
@@ -853,6 +1054,7 @@ class H1():
         env_upper = gymapi.Vec3(0., 0., 0.)
         self.actor_handles = []
         self.envs = []
+        self.arrows = []
         for i in range(self.num_envs):
             # create env instance
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.num_envs)))
@@ -871,9 +1073,20 @@ class H1():
             self.envs.append(env_handle)
             self.actor_handles.append(actor_handle)
 
+            # if self.debug_viz:
+            #     # Create cone (tip of the arrow)    
+            #     cone = self.gym.create_capsule(self.sim, 0.02, 0.1)
+
+            #     # Create the cylinder and cone actors in the environment
+            #     self.arrows.append(self.gym.create_actor(env_handle, cone, gymapi.Transform()))
+
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(feet_names)):
             self.feet_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], feet_names[i])
+
+        self.target_pos_idx = torch.zeros(len(self.cfg.asset.target_pos), dtype=torch.long, device=self.device, requires_grad=False)
+        for i in range(len(self.cfg.asset.target_pos)):
+            self.target_pos_idx[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], self.cfg.asset.target_pos[i])
 
         self.penalized_contact_indices = torch.zeros(len(penalized_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(penalized_contact_names)):
@@ -882,6 +1095,8 @@ class H1():
         self.termination_contact_indices = torch.zeros(len(termination_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(termination_contact_names)):
             self.termination_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], termination_contact_names[i])
+        
+
 
         print('penalized_contact_indices: {}'.format(self.penalized_contact_indices))
         print('termination_contact_indices: {}'.format(self.termination_contact_indices))
@@ -932,21 +1147,45 @@ class H1():
             Default behaviour: draws height measurement points
         """
         # draw height lines
-        if not self.terrain.cfg.measure_heights:
-            return
-        self.gym.clear_lines(self.viewer)
-        self.gym.refresh_rigid_body_state_tensor(self.sim)
-        sphere_geom = gymutil.WireframeSphereGeometry(0.02, 4, 4, None, color=(1, 1, 0))
-        for i in range(self.num_envs):
-            base_pos = (self.root_states[i, :3]).cpu().numpy()
-            heights = self.measured_heights[i].cpu().numpy()
-            height_points = quat_apply_yaw(self.base_quat[i].repeat(heights.shape[0]), self.height_points[i]).cpu().numpy()
-            for j in range(heights.shape[0]):
-                x = height_points[j, 0] + base_pos[0]
-                y = height_points[j, 1] + base_pos[1]
-                z = heights[j]
-                sphere_pose = gymapi.Transform(gymapi.Vec3(x, y, z), r=None)
-                gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[i], sphere_pose) 
+        if hasattr(self, 'terrain') and self.terrain.cfg.measure_heights:
+            self.gym.clear_lines(self.viewer)
+            self.gym.refresh_rigid_body_state_tensor(self.sim)
+            sphere_geom = gymutil.WireframeSphereGeometry(0.02, 4, 4, None, color=(1, 1, 0))
+            for i in range(self.num_envs):
+                base_pos = (self.root_states[i, :3]).cpu().numpy()
+                heights = self.measured_heights[i].cpu().numpy()
+                height_points = quat_apply_yaw(self.base_quat[i].repeat(heights.shape[0]), self.height_points[i]).cpu().numpy()
+                for j in range(heights.shape[0]):
+                    x = height_points[j, 0] + base_pos[0]
+                    y = height_points[j, 1] + base_pos[1]
+                    z = heights[j]
+                    sphere_pose = gymapi.Transform(gymapi.Vec3(x, y, z), r=None)
+                    gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[i], sphere_pose) 
+        if self.cfg.commands.command_type == 'target':
+            self.gym.clear_lines(self.viewer)
+            for i in range(self.num_envs):
+                lin_vel = quat_rotate(self.root_states[[i], 3:7], self.commands[[i],:3])
+                pos = self.root_states[i, :3]
+                # norm = np.linalg.norm(lin_vel)
+                # if norm > 0:
+                #     direction = lin_vel / norm
+                #     z_axis = np.array([0, 0, 1])
+                #     cross_prod = np.cross(z_axis, direction)
+                #     dot_prod = np.dot(z_axis, direction)
+                #     angle = np.arccos(dot_prod)
+                #     if np.linalg.norm(cross_prod) != 0:
+                #         cross_prod = cross_prod / np.linalg.norm(cross_prod)
+                    
+                #     # Create a quaternion from the axis-angle representation
+                #     rotation_quat = gymapi.Quat.from_axis_angle(cross_prod, angle)    
+                #     self.gym.set_actor_pose(self.arrows[i], gymapi.Pose(pos, rotation_quat))
+                p1 = (lin_vel[0]+pos).cpu().numpy()
+                p2 = pos.cpu().numpy()
+                gymutil.draw_line(gymapi.Vec3(p1[0],p1[1],p1[2]),gymapi.Vec3(p2[0],p2[1],p2[2]),gymapi.Vec3(1,0,0),self.gym, self.viewer, self.envs[i])
+                ang_vel = quat_rotate(self.root_states[[i], 3:7], self.commands[[i],3:6])
+                p1 = (ang_vel[0]*10+pos).cpu().numpy()
+                gymutil.draw_line(gymapi.Vec3(p1[0],p1[1],p1[2]),gymapi.Vec3(p2[0],p2[1],p2[2]),gymapi.Vec3(0,1,0),self.gym, self.viewer, self.envs[i])
+
 
     def _init_height_points(self):
         """ Returns points at which the height measurments are sampled (in base frame)
@@ -1088,12 +1327,12 @@ class H1():
 
     def _reward_tracking_lin_vel(self):
         # Tracking of linear velocity commands (xy axes)
-        lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
+        lin_vel_error = torch.sum(torch.square(self.commands[:, :3] - self.base_lin_vel[:, :3]), dim=1)
         return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma), lin_vel_error
     
     def _reward_tracking_ang_vel(self):
         # Tracking of angular velocity commands (yaw) 
-        ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
+        ang_vel_error = torch.sum(torch.square(self.commands[:, 3:6] - self.base_ang_vel), dim=1)
         return torch.exp(-ang_vel_error/self.cfg.rewards.tracking_sigma), ang_vel_error
 
     def _reward_feet_air_time(self):
@@ -1123,10 +1362,30 @@ class H1():
         return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.cfg.rewards.max_contact_force).clip(min=0.), dim=1)
 
     def _reward_target_jt(self):
-        # Penalize distance to target joint angles
-        target_jt_error = torch.sum(torch.abs(self.dof_pos - self.target_jt)*self.dof_weights, dim=1)/self.dof_weights.sum()
+        target_jt_error = torch.sum(torch.abs(self.dof_pos - self.target_jt[:,7:36])*self.dof_weights, dim=1)/self.dof_weights.sum()
         target_jt_exp = torch.exp(-4 * target_jt_error)
         self.target_jt_exp = torch.mean(target_jt_exp)
         return target_jt_exp, target_jt_error
 
+    def _reward_target_vel(self):
+        #Penalize body vel error
+        body_vel = self.body_vel[:,self.target_pos_idx]
+        for i in range(body_vel.shape[1]):
+            body_vel[:,i] = quat_rotate_inverse(self.base_quat, body_vel[:,i])
+        vel_cmd = self.commands[:,6:18].view(-1,4,3)
+        target_pos_err = torch.sum(torch.norm(body_vel-vel_cmd, dim=-1)*(vel_cmd.norm(dim=-1) > 0.2), dim=-1)
+        return target_pos_err, target_pos_err
     
+    def _reward_feet_slide(self) -> torch.Tensor:
+        """Penalize feet sliding.
+
+        This function penalizes the agent for sliding its feet on the ground. The reward is computed as the
+        norm of the linear velocity of the feet multiplied by a binary contact sensor. This ensures that the
+        agent is penalized only when the feet are in contact with the ground.
+        """
+        # Penalize feet sliding
+        contact = self.contact_forces[:, self.feet_indices, 2] > 1.
+        body_vel = self.body_vel[:, self.feet_indices]
+        reward = torch.sum(body_vel.norm(dim=-1) * contact, dim=1)
+        return reward, reward
+
