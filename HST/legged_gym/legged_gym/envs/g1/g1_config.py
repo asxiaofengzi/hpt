@@ -125,35 +125,35 @@ class G1RoughCfg( BaseConfig ):
         }
 
         default_joint_angles = { # = target angles [rad] when action = 0.0
-            'left_hip_pitch_joint':-0.30,
-            'left_hip_roll_joint':0.0, 
-            'left_hip_yaw_joint':0.0, 
-            'left_knee_joint':0.69, 
-            'left_ankle_pitch_joint':-0.39, 
-            'left_ankle_roll_joint':0.0, 
-            'right_hip_pitch_joint':-0.30, 
-            'right_hip_roll_joint':0.0, 
-            'right_hip_yaw_joint':0.0, 
-            'right_knee_joint':0.69, 
-            'right_ankle_pitch_joint':-0.39, 
-            'right_ankle_roll_joint':0.0, 
-            'waist_yaw_joint':0.0, 
-            'waist_roll_joint':0.0, 
-            'waist_pitch_joint':0.0, 
-            'left_shoulder_pitch_joint':0.05, 
-            'left_shoulder_roll_joint':0.16, 
-            'left_shoulder_yaw_joint':-0.3, 
-            'left_elbow_joint':0.80, 
-            'left_wrist_roll_joint':0.0, 
-            'left_wrist_pitch_joint':0.0, 
-            'left_wrist_yaw_joint':0.0, 
-            'right_shoulder_pitch_joint':0.05, 
-            'right_shoulder_roll_joint':-0.16, 
-            'right_shoulder_yaw_joint':0.3, 
-            'right_elbow_joint':0.80, 
-            'right_wrist_roll_joint':0.0, 
-            'right_wrist_pitch_joint':0.0, 
-            'right_wrist_yaw_joint':0.0
+            'left_hip_pitch_joint':-0.28,   #0
+            'left_hip_roll_joint':0.0,      #1
+            'left_hip_yaw_joint':0.0,       #2
+            'left_knee_joint':0.69,         #3
+            'left_ankle_pitch_joint':-0.42, #4
+            'left_ankle_roll_joint':0.0,    #5
+            'right_hip_pitch_joint':-0.28,  #6
+            'right_hip_roll_joint':0.0,     #7
+            'right_hip_yaw_joint':0.0,      #8
+            'right_knee_joint':0.69,        #9
+            'right_ankle_pitch_joint':-0.42, #10
+            'right_ankle_roll_joint':0.0,   #11
+            'waist_yaw_joint':0.0,          #12
+            'waist_roll_joint':0.0,         #13
+            'waist_pitch_joint':0.0,        #14
+            'left_shoulder_pitch_joint':0.05, #15
+            'left_shoulder_roll_joint':0.16, #16
+            'left_shoulder_yaw_joint':-0.3, #17
+            'left_elbow_joint':0.80,        #18
+            'left_wrist_roll_joint':0.0,    #19
+            'left_wrist_pitch_joint':0.0,   #20
+            'left_wrist_yaw_joint':0.0,     #21
+            'right_shoulder_pitch_joint':0.05, #22
+            'right_shoulder_roll_joint':-0.16, #23
+            'right_shoulder_yaw_joint':0.3, #24
+            'right_elbow_joint':0.80,       #25
+            'right_wrist_roll_joint':0.0,   #26
+            'right_wrist_pitch_joint':0.0,  #27
+            'right_wrist_yaw_joint':0.0     #28
         }
 
     class control:
@@ -176,9 +176,10 @@ class G1RoughCfg( BaseConfig ):
                    }     # [N*m*s/rad]
         # action scale: target angle = actionScale * action + defaultAngle
         action_scale = 1
-        clip_actions = True
+        clip_actions = False
         # decimation: Number of control action updates @ sim DT per policy DT
         decimation = 4
+        discrete_lev = 25
         
     class asset:
         file = '/home/fleaven/robot/unitree_ros/robots/g1_description/g1_29dof_rev_1_0.urdf'
@@ -186,7 +187,7 @@ class G1RoughCfg( BaseConfig ):
         name = "g1"
         foot_name = '_ankle_roll_link'
         penalize_contacts_on = ["elbow"]
-        terminate_after_contacts_on = []
+        terminate_after_contacts_on = ["knee"]
         target_pos = ['left_ankle_pitch_link','right_ankle_pitch_link','left_wrist_yaw_link','right_wrist_yaw_link']
         exclude_dof = ["wrist"]
         disable_gravity = False
@@ -208,7 +209,7 @@ class G1RoughCfg( BaseConfig ):
     class domain_rand:
         drop_target=True
         randomize_friction = True
-        friction_range = [0.3, 5.0]
+        friction_range = [0.4, 0.7]
         randomize_base_mass = True
         added_mass_range = [-1., 1.]
         push_robots = False
@@ -219,7 +220,7 @@ class G1RoughCfg( BaseConfig ):
 
     class rewards:
         class scales:
-            termination = -1
+            termination = -50
             tracking_lin_vel = 1
             tracking_ang_vel = 1
             lin_vel_z = -0
@@ -240,6 +241,7 @@ class G1RoughCfg( BaseConfig ):
             feet_slide = -1
             height = -0.01
             torso_stable = 0.1
+            symmetry = 1
 
         only_positive_rewards = True # if true negative total rewards are clipped at zero (avoids early termination problems)
         tracking_sigma = 0.25 # tracking reward = exp(-error^2/sigma)
@@ -247,6 +249,7 @@ class G1RoughCfg( BaseConfig ):
         soft_dof_vel_limit = 1.
         soft_torque_limit = 1.
         max_contact_force = 100. # forces above this value are penalized
+        symmetry_zero = ['waist_roll_joint','waist_yaw_joint']
 
     class termination:
         r_threshold = 0.7
@@ -313,9 +316,9 @@ class G1RoughCfgPPO(BaseConfig):
     seed = 1
     runner_class_name = 'OnPolicyRunner'
     class policy:
-        init_noise_std = 1.0
-        # actor_hidden_dims = [512, 256, 128]
-        # critic_hidden_dims = [512, 256, 128]
+        init_noise_std = 0.2
+        actor_hidden_dims = [512, 256, 256]
+        critic_hidden_dims = [512, 256, 256]
         # activation = 'elu' # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
         # only for 'ActorCriticRecurrent':
         # rnn_type = 'lstm'
@@ -328,10 +331,10 @@ class G1RoughCfgPPO(BaseConfig):
         use_clipped_value_loss = True
         clip_param = 0.2
         entropy_coef = 1e-5
-        num_learning_epochs = 4
+        num_learning_epochs = 2
         num_mini_batches = 4 # mini batch size = num_envs*nsteps / nminibatches
-        learning_rate = 1.e-5
-        schedule = 'fixed' # could be adaptive, fixed
+        learning_rate = 1.e-3
+        schedule = 'adaptive' # could be adaptive, fixed
         gamma = 0.99
         lam = 0.95
         desired_kl = 0.01

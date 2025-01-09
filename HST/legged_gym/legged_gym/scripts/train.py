@@ -39,9 +39,9 @@ import numpy as np
 
 def train(args):
     run_id = wandb.util.generate_id()
-    wandb.init(name=args.run_name, id=run_id,dir="/home/fleaven/robot/humanplus/HST/g1/logs", sync_tensorboard=True)
-    wandb.save("/home/fleaven/robot/humanplus/HST/legged_gym/legged_gym/envs/g1/g1_config.py", policy="now")
-    wandb.save("/home/fleaven/robot/humanplus/HST/legged_gym/legged_gym/envs/g1/g1.py", policy="now")
+    wandb.init(name=args.run_name, id=run_id,dir="/home/fleaven/robot/hpt/HST/g1/logs", sync_tensorboard=True)
+    wandb.save("/home/fleaven/robot/hpt/HST/legged_gym/legged_gym/envs/g1/g1_config.py", policy="now")
+    wandb.save("/home/fleaven/robot/hpt/HST/legged_gym/legged_gym/envs/g1/g1.py", policy="now")
     # wandb.save(LEGGED_GYM_ROOT_DIR + "../rsl_rl/modules/actor_critic.py", policy="now")
     # wandb.save(LEGGED_GYM_ROOT_DIR + "../rsl_rl/algorithms/ppo.py", policy="now")
     # wandb.save(LEGGED_GYM_ROOT_DIR + "../rsl_rl/runners/on_policy_runner.py", policy="now")

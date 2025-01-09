@@ -444,11 +444,12 @@ class G1():
         left_leg = quat_rotate_inverse(self.base_quat, self.body_pos[:,5]-self.root_states[:,:3]) #left ankle: 5 right ankle:11
         right_leg = quat_rotate_inverse(self.base_quat, self.body_pos[:,11]-self.root_states[:,:3]) #left ankle: 5 right ankle:11
         cross_leg = ((left_leg[:,1]<0) | (right_leg[:,1] > 0))
-        leg_air = ((self.body_pos[:,5,2]>0.15) | (self.body_pos[:,11,2] > 0.15))
+        leg_air = ((self.body_pos[:,5,2]>0.20) | (self.body_pos[:,11,2] > 0.20))
+        hands_up = ((self.body_pos[:,22,2]>1.1) | (self.body_pos[:,29,2] > 1.1))
 
         yaw_leg = ((torch.abs(self.dof_pos[:, 2]) > 0.5) | (torch.abs(self.dof_pos[:, 8] > 0.5)))
 
-        hip_p = ((torch.abs(self.dof_pos[:, 3]) < 0.1) | (torch.abs(self.dof_pos[:, 9] < 0.1)))
+        knew_pos = ((self.dof_pos[:, 3] < 0.1) | (self.dof_pos[:, 9] < 0.1))
 
         r, p = self.base_orn_rp[:, 0], self.base_orn_rp[:, 1]
         z = self.root_states[:, 2]
@@ -466,7 +467,7 @@ class G1():
         # if len(self.reset_triggers) > 0:
         #     print('reset_triggers: ', self.reset_triggers)
 
-        self.reset_buf = termination_contact_buf | hip_p | cross_leg | yaw_leg | leg_air | r_threshold_buff | p_threshold_buff | z_threshold_buff | self.time_out_buf
+        self.reset_buf = termination_contact_buf | knew_pos | hands_up | cross_leg | yaw_leg | leg_air | r_threshold_buff | p_threshold_buff | z_threshold_buff | self.time_out_buf
     
 
     def reset(self):
@@ -653,6 +654,7 @@ class G1():
             self.dof_pos_limits = torch.zeros(self.num_dofs, 2, dtype=torch.float, device=self.device, requires_grad=False)
             self.dof_vel_limits = torch.zeros(self.num_dofs, dtype=torch.float, device=self.device, requires_grad=False)
             self.torque_limits = torch.zeros(self.num_dofs, dtype=torch.float, device=self.device, requires_grad=False)
+            self.torque_powlim = pow(1.2,25.)
             for i in range(len(props)):
                 self.dof_pos_limits[i, 0] = props["lower"][i].item()
                 self.dof_pos_limits[i, 1] = props["upper"][i].item()
@@ -741,10 +743,20 @@ class G1():
             if self.cfg.control.clip_actions:
                 target_dof_pos = torch.clip(target_dof_pos, self.dof_pos_limits[:, 0], self.dof_pos_limits[:, 1])
             torques = self.p_gains*(target_dof_pos - self.dof_pos + self.actions_scaled) - self.d_gains*self.dof_vel
+        elif control_type=="D": #discrete control
+            self.torques[:,self.execute_dof] = (self._torque_tj(self.actions)/self.torque_table[-1])
+            self.torques *= self.torque_limits
+            self.torques = self.torques*0.8 + self.last_torques*0.2
+            self.last_torques[:] = self.torques[:]
+            return self.torques
+        elif control_type=="W":
+            torques = (torch.pow(1.2, torch.abs(self.actions_scaled*25))-1)*((self.actions_scaled<0)*-1.+(self.actions_scaled>=0))
+            torques *= self.torque_limits/self.torque_powlim
         else:
             raise NameError(f"Unknown controller type: {control_type}")
         ret = torch.clip(torques, -self.torque_limits, self.torque_limits)
-        self.limit_torque = torques - ret
+        self.limit_torque[:] = torques - ret
+
         return ret
 
 
@@ -904,6 +916,8 @@ class G1():
         self.gravity_vec = to_torch(get_axis_params(-1., self.up_axis_idx), device=self.device).repeat((self.num_envs, 1))
         self.forward_vec = to_torch([1., 0., 0.], device=self.device).repeat((self.num_envs, 1))
         self.torques = torch.zeros(self.num_envs, self.num_dofs, dtype=torch.float, device=self.device, requires_grad=False)
+        self.last_torques = torch.zeros(self.num_envs, self.num_dofs, dtype=torch.float, device=self.device, requires_grad=False)
+        self.limit_torque = torch.zeros(self.num_envs, self.num_dofs, dtype=torch.float, device=self.device, requires_grad=False)
         self.p_gains = torch.zeros(self.num_dofs, dtype=torch.float, device=self.device, requires_grad=False)
         self.d_gains = torch.zeros(self.num_dofs, dtype=torch.float, device=self.device, requires_grad=False)
         self.actions_scaled = torch.zeros((self.num_envs,self.num_dofs), dtype=torch.float32, device=self.device) #在这里补齐空缺
@@ -922,6 +936,9 @@ class G1():
         self.base_lin_acc = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device)
         self.last_base_lin_vel = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device)
         self.base_orn_rp = self.get_body_orientation() # [r, p]
+        self.act_table = torch.zeros(self.cfg.control.discrete_lev*2+1,dtype=torch.float, device=self.device)
+        self.torque_table = torch.zeros(self.cfg.control.discrete_lev*2+1,dtype=torch.float, device=self.device)
+        self._init_discrete_table()
         # self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
         if self.cfg.terrain.measure_heights:
             self.height_points = self._init_height_points()
@@ -966,7 +983,18 @@ class G1():
                 if self.cfg.control.control_type in ["P", "V"]:
                     print(f"PD damping of joint {name} were not defined, setting them to default")
         self.default_dof_pos = self.default_dof_pos.unsqueeze(0)
-
+    def _init_discrete_table(self):
+        tblen = self.act_table.shape[0]-1
+        self.act_table = torch.tensor([i/tblen for i in range(tblen+1)], dtype=torch.float, device=self.device)
+        self.act_table = self.act_table - self.cfg.control.discrete_lev/tblen
+        self.act_table *= 2
+        self.act_table[-1] = torch.inf
+        rg = torch.arange(1, self.cfg.control.discrete_lev+1, dtype=torch.float, device=self.device)
+        rg = torch.pow(1.2, rg)-1.
+        self.torque_table[[i for i in range(self.cfg.control.discrete_lev-1,-1,-1)]] = -rg
+        self.torque_table[self.cfg.control.discrete_lev+1:self.cfg.control.discrete_lev*2+1] = rg
+    def _torque_tj(self, act):
+        return self.torque_table[torch.searchsorted(self.act_table, act)]
     def _prepare_reward_function(self):
         """ Prepares a list of reward functions, whcih will be called to compute the total reward.
             Looks for self._reward_<REWARD_NAME>, where <REWARD_NAME> are names of all non zero reward scales in the cfg.
@@ -1084,6 +1112,13 @@ class G1():
         termination_contact_names = []
         for name in self.cfg.asset.terminate_after_contacts_on:
             termination_contact_names.extend([s for s in body_names if name in s])
+        self.symmetry_zero_idx = []
+        for name in self.cfg.rewards.symmetry_zero:
+            self.symmetry_zero_idx.extend([self.dof_names.index(s) for s in self.dof_names if name in s])
+        self.symmetry_same_idx_l=[self.dof_names.index(s) for s in self.dof_names if 'left' in s and 'yaw' not in s and 'roll' not in s]
+        self.symmetry_same_idx_r=[self.dof_names.index(s) for s in self.dof_names if 'right' in s and 'yaw' not in s and 'roll' not in s]
+        self.symmetry_opp_idx_l=[self.dof_names.index(s) for s in self.dof_names if 'left' in s and ('yaw' in s or 'roll' in s)]
+        self.symmetry_opp_idx_r=[self.dof_names.index(s) for s in self.dof_names if 'right' in s and ('yaw' in s or 'roll' in s)]
 
         base_init_state_list = self.cfg.init_state.pos + self.cfg.init_state.rot + self.cfg.init_state.lin_vel + self.cfg.init_state.ang_vel
         self.base_init_state = to_torch(base_init_state_list, device=self.device, requires_grad=False)
@@ -1137,7 +1172,6 @@ class G1():
         for i in range(len(termination_contact_names)):
             self.termination_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], termination_contact_names[i])
         
-
 
         print('penalized_contact_indices: {}'.format(self.penalized_contact_indices))
         print('termination_contact_indices: {}'.format(self.termination_contact_indices))
@@ -1389,7 +1423,7 @@ class G1():
     
     def _reward_termination(self):
         # Terminal reward / penalty
-        return self.reset_buf * ~self.time_out_buf
+        return (self.reset_buf * ~self.time_out_buf)*(self.episode_length_buf+100.).sqrt()/10.
     
     def _reward_dof_pos_limits(self):
         # Penalize dof positions too close to the limit
@@ -1468,10 +1502,18 @@ class G1():
         return reward, reward
     
     def _reward_height(self) -> torch.Tensor:
-        height_err = 0.7 - self.root_states[:,2]
+        height_err = 0.65 - self.root_states[:,2]
         height_err = height_err*(height_err>0)
         return height_err, height_err
 
     def _reward_torso_stable(self) -> torch.Tensor:
         err = torch.sum(torch.square(self.body_vel[:,15]), dim=-1)
         return torch.exp(-25 * err),err
+
+    def _reward_symmetry(self) -> torch.Tensor:
+        err1 = torch.abs(self.dof_pos[:,self.symmetry_opp_idx_l]+self.dof_pos[:,self.symmetry_opp_idx_r])
+        err2 = torch.abs(self.dof_pos[:,self.symmetry_same_idx_l]-self.dof_pos[:,self.symmetry_same_idx_r])
+        err3 = torch.abs(self.dof_pos[:,self.symmetry_zero_idx])
+        err = err1.sum(dim=-1)+err2.sum(dim=-1)+err3.sum(dim=-1)
+        return torch.exp(-1 * err), err
+ 
