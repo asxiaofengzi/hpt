@@ -13,15 +13,14 @@ def load_target_jt(device, file, offset):
 
 
 def load_target_jt_new(device, file, offset, freq):
+    idx = np.concatenate((list(range(0,36)), list(range(36+7*3,36+7*3+6)),list(range(36+20*3,36+20*3+6))))
     fr = file[-12:-9]
     fr = int(fr[1:]) if fr[0]=='_' else int(fr)
     assert(freq<= fr)
     sampling_rate = fr // freq #向快对齐
     one_target_jt = np.load(f"/home/fleaven/dataset/test_amass/{file}").astype(np.float32)
-    one_target_jt = one_target_jt[::sampling_rate]
+    one_target_jt = one_target_jt[::sampling_rate, idx]
     target_jt = torch.from_numpy(one_target_jt).to(device).unsqueeze(0)
     #target_jt += offset
-
-    size = torch.tensor([target_jt.shape[1]]).to(device)
-    return target_jt, size
+    return target_jt
 

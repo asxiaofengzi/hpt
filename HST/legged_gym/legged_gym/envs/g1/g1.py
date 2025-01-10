@@ -234,7 +234,7 @@ class G1():
         self.cfg = cfg
         self.sim_params = sim_params
         self.height_samples = None
-        self.debug_viz = True
+        self.debug_viz = False
         self.init_done = False
         self.video_step = -1
         self._parse_cfg(self.cfg)
@@ -325,14 +325,15 @@ class G1():
 
     def _init_target_jt(self):
         if self.cfg.commands.command_type == "target":
-            self.target_jt_seq, self.target_jt_seq_len = load_target_jt_new(self.device, self.cfg.human.filename, self.default_dof_pos, self.cfg.human.freq)
-            self.num_target_jt_seq, self.max_target_jt_seq_len, _ = self.target_jt_seq.shape
+            self.target_jt_seq = load_target_jt_new(self.device, self.cfg.human.filename, self.default_dof_pos, self.cfg.human.freq)
+            self.num_target_jt_seq = self.target_jt_seq.shape[0]
             print(f"Loaded target joint trajectories of shape {self.target_jt_seq.shape}")
             self.target_jt_dt = 1 / self.cfg.human.freq
             self.target_jt_update_steps = self.target_jt_dt / self.dt # not necessary integer
             assert(self.dt <= self.target_jt_dt)
             self.target_jt_i = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
             self.target_jt_j = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+            self.target_jt_exp = torch.tensor(0., dtype=torch.long, device=self.device)
             self.target_jt_update_steps_int = sample_int_from_float(self.target_jt_update_steps)
             self.delayed_obs_target_jt = None
             self.delayed_obs_target_jt_steps = self.cfg.human.delay / self.target_jt_dt
@@ -345,9 +346,8 @@ class G1():
         if self.cfg.commands.command_type == "target":
             self.target_jt = self.target_jt_seq[self.target_jt_i, self.target_jt_j]
             self.target_jt_next = self.target_jt_seq[self.target_jt_i, self.target_jt_j+1]
-            body_idx=[7,8,20,21]
-            self.target_bp = self.target_jt[:,36:].view(self.num_envs,-1,3)[:,body_idx]
-            self.target_bp_next = self.target_jt_next[:,36:].view(self.num_envs,-1,3)[:,body_idx]
+            self.target_bp = self.target_jt[:,36:].view(self.num_envs,-1,3)
+            self.target_bp_next = self.target_jt_next[:,36:].view(self.num_envs,-1,3)
             self.delayed_obs_target_jt = self.target_jt_seq[self.target_jt_i, torch.maximum(self.target_jt_j - self.delayed_obs_target_jt_steps_int, torch.tensor(0)),7:36]
 
             base_quat = self.target_jt[:, 3:7]
@@ -366,6 +366,9 @@ class G1():
 
             if (self.common_step_counter +1)% self.target_jt_update_steps_int == 0:
                 self.target_jt_j += 1
+            
+            
+            #self.__upd_root() # view
 
 
     def step(self, actions):
@@ -441,15 +444,17 @@ class G1():
         """
         termination_contact_buf = torch.any(torch.norm(self.contact_forces[:, self.termination_contact_indices, :], dim=-1) > 1., dim=1)
 
-        left_leg = quat_rotate_inverse(self.base_quat, self.body_pos[:,5]-self.root_states[:,:3]) #left ankle: 5 right ankle:11
-        right_leg = quat_rotate_inverse(self.base_quat, self.body_pos[:,11]-self.root_states[:,:3]) #left ankle: 5 right ankle:11
-        cross_leg = ((left_leg[:,1]<0) | (right_leg[:,1] > 0))
-        leg_air = ((self.body_pos[:,5,2]>0.20) | (self.body_pos[:,11,2] > 0.20))
-        hands_up = ((self.body_pos[:,22,2]>1.1) | (self.body_pos[:,29,2] > 1.1))
+        # left_leg = quat_rotate_inverse(self.base_quat, self.body_pos[:,5]-self.root_states[:,:3]) #left ankle: 5 right ankle:11
+        # right_leg = quat_rotate_inverse(self.base_quat, self.body_pos[:,11]-self.root_states[:,:3]) #left ankle: 5 right ankle:11
+        # cross_leg = ((left_leg[:,1]<0) | (right_leg[:,1] > 0))
+        # leg_air = ((self.body_pos[:,5,2]>0.20) | (self.body_pos[:,11,2] > 0.20))
+        # hands_up = ((self.body_pos[:,22,2]>1.1) | (self.body_pos[:,29,2] > 1.1))
 
-        yaw_leg = ((torch.abs(self.dof_pos[:, 2]) > 0.5) | (torch.abs(self.dof_pos[:, 8] > 0.5)))
+        # yaw_leg = ((torch.abs(self.dof_pos[:, 2]) > 0.5) | (torch.abs(self.dof_pos[:, 8] > 0.5)))
 
-        knew_pos = ((self.dof_pos[:, 3] < 0.1) | (self.dof_pos[:, 9] < 0.1))
+        # knee_pos = ((self.dof_pos[:, 3] < 0.1) | (self.dof_pos[:, 9] < 0.1))
+
+        too_far = torch.norm(self.root_states[:, :2] - (self.init_pos[:,:2] + self.target_jt[:,:2] - self.init_target_pos[:,:2]), dim=-1) > 1.
 
         r, p = self.base_orn_rp[:, 0], self.base_orn_rp[:, 1]
         z = self.root_states[:, 2]
@@ -461,13 +466,13 @@ class G1():
 
         self.time_out_buf = (self.episode_length_buf > self.max_episode_length) 
         if self.cfg.commands.command_type == 'target':
-            self.time_out_buf = self.time_out_buf | (self.target_jt_j >= self.target_jt_seq_len-2) # no terminal reward for time-outs
+            self.time_out_buf = self.time_out_buf | (self.target_jt_j >= self.target_jt_seq[0].shape[0]-2) # no terminal reward for time-outs
 
         # self.reset_triggers = torch.stack([termination_contact_buf, r_threshold_buff, p_threshold_buff, z_threshold_buff, self.time_out_buf], dim=-1).nonzero(as_tuple=False)
         # if len(self.reset_triggers) > 0:
         #     print('reset_triggers: ', self.reset_triggers)
 
-        self.reset_buf = termination_contact_buf | knew_pos | hands_up | cross_leg | yaw_leg | leg_air | r_threshold_buff | p_threshold_buff | z_threshold_buff | self.time_out_buf
+        self.reset_buf = too_far | termination_contact_buf | r_threshold_buff | p_threshold_buff | z_threshold_buff | self.time_out_buf
     
 
     def reset(self):
@@ -560,7 +565,7 @@ class G1():
         # print(self.target_jt_j[:3], self.target_jt_i[:3])
         if self.cfg.commands.command_type == 'target':
             obs_target = self.delayed_obs_target_jt * self.obs_scales.dof_pos
-            if self.cfg.domain_rand.drop_target and self.cfg.commands.command_type=='target':
+            if self.cfg.domain_rand.drop_target:
                 obs_target *= (torch.rand(self.dof_pos.shape[1],device=self.device)>self.target_jt_exp)
         else:
             obs_target = torch.zeros(self.num_envs, self.num_dofs, dtype=torch.float32, device=self.device)
@@ -766,7 +771,8 @@ class G1():
     def _reset_jt(self, env_ids):
         if self.cfg.commands.command_type == "target":
             self.target_jt_i[env_ids] = torch.randint(0, self.num_target_jt_seq, (env_ids.shape[0],), device=self.device)
-            self.target_jt_j[env_ids] = torch.randint(0,self.target_jt_seq_len - self.cfg.human.least_time*self.cfg.human.freq, (env_ids.shape[0],), dtype=torch.long, device=self.device)
+            self.target_jt_j[env_ids] = torch.randint(0,self.target_jt_seq.shape[1] - self.cfg.human.least_time*self.cfg.human.freq, (env_ids.shape[0],), dtype=torch.long, device=self.device)
+            self.init_target_pos[env_ids] = self.target_jt_seq[self.target_jt_i[env_ids], self.target_jt_j[env_ids],:3]
             self.update_target_jt()
         
         #self.target_jt[env_ids] = self.target_jt_seq[self.target_jt_i[env_ids], self.target_jt_j[env_ids]]
@@ -807,9 +813,12 @@ class G1():
         else:
             self.root_states[env_ids] = self.base_init_state
             self.root_states[env_ids, :3] += self.env_origins[env_ids]
+        self.init_pos[env_ids] = self.root_states[env_ids, :3]
+
         # base velocities
         #self.root_states[env_ids, 7:13] = torch_rand_float(-0.5, 0.5, (len(env_ids), 6), device=self.device) # [7:10]: lin vel, [10:13]: ang vel
         if self.cfg.commands.command_type == 'target':
+            self.root_states[env_ids, 2] += self.target_jt[env_ids,2]
             self.root_states[env_ids, 3:7] = self.target_jt[env_ids,3:7]
             self.root_states[env_ids, 7:10] = (self.target_jt_next[env_ids,:3] - self.target_jt[env_ids,:3])*self.cfg.human.freq*torch_rand_float(0.9, 1.1, (len(env_ids), 3), device=self.device) 
             self.root_states[env_ids, 10:13] = quaternion_to_angular_velocity(self.target_jt[env_ids,3:7],self.target_jt_next[env_ids,3:7],  1/self.cfg.human.freq) #dq/dt = 1/2*w*q
@@ -817,6 +826,18 @@ class G1():
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                      gymtorch.unwrap_tensor(self.root_states),
                                                      gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
+        
+    def __upd_root(self):
+        self.root_states[:, :2] = self.init_pos[:, :2] + self.target_jt[:,:2]-self.init_target_pos[:,:2]
+        self.root_states[:, 3:7] = self.target_jt[:,3:7]
+        self.root_states[:, 7:10] = (self.target_jt_next[:,:3] - self.target_jt[:,:3])*self.cfg.human.freq
+        self.root_states[:, 10:13] = quaternion_to_angular_velocity(self.target_jt[:,3:7],self.target_jt_next[:,3:7],  1/self.cfg.human.freq) #dq/dt = 1/2*w*q
+
+        self.dof_pos[:] = self.target_jt[:,7:36]
+        self.dof_vel[:] = (self.target_jt_next[:, 7:36] - self.target_jt[:, 7:36])
+        
+        self.gym.set_actor_root_state_tensor(self.sim, gymtorch.unwrap_tensor(self.root_states))
+        self.gym.set_dof_state_tensor(self.sim, gymtorch.unwrap_tensor(self.dof_state))
 
     def _push_robots(self):
         """ Random pushes the robots. Emulates an impulse by setting a randomized base velocity. 
@@ -938,6 +959,9 @@ class G1():
         self.base_orn_rp = self.get_body_orientation() # [r, p]
         self.act_table = torch.zeros(self.cfg.control.discrete_lev*2+1,dtype=torch.float, device=self.device)
         self.torque_table = torch.zeros(self.cfg.control.discrete_lev*2+1,dtype=torch.float, device=self.device)
+        self.init_pos = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device)
+        self.init_target_pos = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device)
+        
         self._init_discrete_table()
         # self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
         if self.cfg.terrain.measure_heights:
@@ -1258,7 +1282,7 @@ class G1():
                 p2 = pos.cpu().numpy()
                 gymutil.draw_line(gymapi.Vec3(p1[0],p1[1],p1[2]),gymapi.Vec3(p2[0],p2[1],p2[2]),gymapi.Vec3(1,0,0),self.gym, self.viewer, self.envs[i])
                 ang_vel = quat_rotate(self.root_states[[i], 3:7], self.commands[[i],3:6])
-                p1 = (ang_vel[0]*10+pos).cpu().numpy()
+                p1 = (ang_vel[0]*2+pos).cpu().numpy()
                 gymutil.draw_line(gymapi.Vec3(p1[0],p1[1],p1[2]),gymapi.Vec3(p2[0],p2[1],p2[2]),gymapi.Vec3(0,1,0),self.gym, self.viewer, self.envs[i])
 
 
@@ -1398,8 +1422,8 @@ class G1():
     
     def _reward_torques_limit(self):
         # Penalize torques
-        err = torch.sum(torch.square(self.limit_torque), dim=1)
-        return torch.exp(-err/160000), err
+        err = torch.sum(torch.abs(self.limit_torque), dim=1)
+        return torch.exp(-err/200), err
 
     def _reward_dof_vel(self):
         # Penalize dof velocities
@@ -1419,7 +1443,7 @@ class G1():
     def _reward_collision(self):
         # Penalize collisions on selected bodies
         err = torch.sum(torch.norm(self.contact_forces[:, self.penalized_contact_indices, :], dim=-1), dim=1)
-        return torch.exp(-err/1), err
+        return torch.exp(-err/50), err
     
     def _reward_termination(self):
         # Terminal reward / penalty
@@ -1429,22 +1453,32 @@ class G1():
         # Penalize dof positions too close to the limit
         out_of_limits = -(self.dof_pos - self.dof_pos_limits[:, 0]).clip(max=0.) # lower limit
         out_of_limits += (self.dof_pos - self.dof_pos_limits[:, 1]).clip(min=0.)
-        return torch.sum(out_of_limits, dim=1)
+        err = torch.sum(out_of_limits, dim=1)
+        return torch.exp(-0.1*err), err
 
     def _reward_dof_vel_limits(self):
         # Penalize dof velocities too close to the limit
         # clip to max error = 1 rad/s per joint to avoid huge penalties
-        return torch.sum((torch.abs(self.dof_vel) - self.dof_vel_limits*self.cfg.rewards.soft_dof_vel_limit).clip(min=0., max=1.), dim=1)
+        err = torch.sum((torch.abs(self.dof_vel) - self.dof_vel_limits*self.cfg.rewards.soft_dof_vel_limit).clip(min=0., max=1.), dim=1)
+        return torch.exp(-0.1*err), err
+    
+    def _reward_tracking_pos(self):
+        err = torch.norm(self.root_states[:, :2] - (self.init_pos[:,:2] + self.target_jt[:,:2] - self.init_target_pos[:,:2]), dim=-1)
+        return torch.exp(-1.*err), err
+
+    def _reward_tracking_ornt(self):
+        err_quat = torch.abs(quat_mul(self.target_jt[:,3:7], quat_conjugate(self.root_states[:, 3:7]))[:,3])    # 旋转偏差角度
+        return torch.exp(-1.*err_quat), err_quat
 
     def _reward_tracking_lin_vel(self):
         # Tracking of linear velocity commands (xy axes)
         lin_vel_error = torch.sum(torch.square(self.commands[:, :3] - self.base_lin_vel[:, :3]), dim=1)
-        return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma), lin_vel_error
+        return torch.exp(-lin_vel_error/0.2), lin_vel_error
     
     def _reward_tracking_ang_vel(self):
         # Tracking of angular velocity commands (yaw) 
         ang_vel_error = torch.sum(torch.square(self.commands[:, 3:6] - self.base_ang_vel), dim=1)
-        return torch.exp(-ang_vel_error/10), ang_vel_error
+        return torch.exp(-ang_vel_error/5), ang_vel_error
 
     def _reward_feet_air_time(self):
         # Reward long steps
@@ -1476,7 +1510,7 @@ class G1():
     def _reward_target_jt(self):
         target_jt_error = torch.sum(torch.abs(self.dof_pos - self.target_jt[:,7:36])*self.dof_weights, dim=1)/self.dof_weights.sum()
         target_jt_exp = torch.exp(-4 * target_jt_error)
-        self.target_jt_exp = torch.mean(target_jt_exp)
+        self.target_jt_exp = torch.mean(target_jt_exp, dim=-1)
         return target_jt_exp, target_jt_error
 
     def _reward_target_vel(self):
@@ -1486,7 +1520,7 @@ class G1():
             body_vel[:,i] = quat_rotate_inverse(self.base_quat, body_vel[:,i])
         vel_cmd = self.commands[:,6:18].view(-1,4,3)
         target_pos_err = torch.sum(torch.norm(body_vel-vel_cmd, dim=-1)*(vel_cmd.norm(dim=-1) > 0.2), dim=-1)
-        return target_pos_err, target_pos_err
+        return torch.exp(-0.1 * target_pos_err), target_pos_err
     
     def _reward_feet_slide(self) -> torch.Tensor:
         """Penalize feet sliding.

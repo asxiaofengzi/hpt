@@ -35,8 +35,8 @@ class G1RoughCfg( BaseConfig ):
         delay = 0.0 # delay in seconds
         freq = 20
         resample_on_env_reset = True
-        filename = 'Walking_3_poses_120_jpos.npy'
-        least_time = 3 #至少要学习3秒
+        filename = '0007_Walking001_poses_120_jpos.npy'
+        least_time = 10 #至少要学习10秒
     class env:
         num_envs = 2048
         num_dofs = 29
@@ -80,7 +80,7 @@ class G1RoughCfg( BaseConfig ):
         max_curriculum = 1.
         num_commands = 18 # default: lin_vel_x, lin_vel_y, ang_vel_yaw, heading (in heading mode ang_vel_yaw is recomputed from heading error)
         resampling_time = 10. # time before command are changed[s]
-        command_type = 'vel_ang' #'heading', 'vel_ang','target'
+        command_type = 'target' #'heading', 'vel_ang','target'
         class ranges:
             lin_vel_x = [0.0, 0.0] # min max [m/s]
             lin_vel_y = [0, 0]   # min max [m/s]
@@ -186,8 +186,8 @@ class G1RoughCfg( BaseConfig ):
         arrow=''
         name = "g1"
         foot_name = '_ankle_roll_link'
-        penalize_contacts_on = ["elbow"]
-        terminate_after_contacts_on = ["knee"]
+        penalize_contacts_on = ["elbow","knee","hip"]
+        terminate_after_contacts_on = []
         target_pos = ['left_ankle_pitch_link','right_ankle_pitch_link','left_wrist_yaw_link','right_wrist_yaw_link']
         exclude_dof = ["wrist"]
         disable_gravity = False
@@ -220,31 +220,33 @@ class G1RoughCfg( BaseConfig ):
 
     class rewards:
         class scales:
-            termination = -50
+            termination = -0
             tracking_lin_vel = 1
             tracking_ang_vel = 1
             lin_vel_z = -0
             ang_vel_xy = -0
             orientation = -0.
+            tracking_pos = 1
+            tracking_ornt = 1
             torques = 0.0
-            torques_limit = 0.1
-            dof_vel = 0.001
+            torques_limit = 0.01
+            dof_vel = 0.0
             dof_acc = 0.0
             feet_air_time = 0.
-            collision = 1
+            collision = 0.2
             feet_stumble = -0.0 
             action_rate = 0.0
-            stand_still = 1
-            dof_pos_limits = -0.0
-            target_jt = 0
-            target_vel = -0.00
-            feet_slide = -1
-            height = -0.01
-            torso_stable = 0.1
-            symmetry = 1
+            stand_still = 0
+            dof_pos_limits = 0.1
+            dof_vel_limits = 0.1
+            target_jt = 2
+            target_vel = 1
+            feet_slide = -0.1
+            height = -0.0
+            torso_stable = 0.
+            symmetry = 0.
 
         only_positive_rewards = True # if true negative total rewards are clipped at zero (avoids early termination problems)
-        tracking_sigma = 0.25 # tracking reward = exp(-error^2/sigma)
         soft_dof_pos_limit = 1. # percentage of urdf limits, values above this limit are penalized
         soft_dof_vel_limit = 1.
         soft_torque_limit = 1.
@@ -317,8 +319,8 @@ class G1RoughCfgPPO(BaseConfig):
     runner_class_name = 'OnPolicyRunner'
     class policy:
         init_noise_std = 0.2
-        actor_hidden_dims = [512, 256, 256]
-        critic_hidden_dims = [512, 256, 256]
+        # actor_hidden_dims = [512, 256, 256]   transformer ppo 已不用这些参数
+        # critic_hidden_dims = [512, 256, 256]
         # activation = 'elu' # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
         # only for 'ActorCriticRecurrent':
         # rnn_type = 'lstm'
@@ -333,7 +335,7 @@ class G1RoughCfgPPO(BaseConfig):
         entropy_coef = 1e-5
         num_learning_epochs = 2
         num_mini_batches = 4 # mini batch size = num_envs*nsteps / nminibatches
-        learning_rate = 1.e-3
+        learning_rate = 1.e-4
         schedule = 'adaptive' # could be adaptive, fixed
         gamma = 0.99
         lam = 0.95
@@ -351,7 +353,7 @@ class G1RoughCfgPPO(BaseConfig):
         experiment_name = 'rough_g1'
         run_name = None
         # load and resume
-        resume = True
+        resume = False
         load_run = -1 # -1 = last run
         checkpoint = -1 # -1 = last saved model
         resume_path = None # updated from load_run and chkpt

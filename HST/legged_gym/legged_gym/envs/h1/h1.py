@@ -216,6 +216,8 @@ class H1():
             self.gym.refresh_dof_state_tensor(self.sim)
         self.post_physics_step()
 
+        if self.viewer and self.enable_viewer_sync and self.debug_viz:
+            self._draw_debug_vis()
         # return clipped obs, clipped states (None), rewards, dones and infos
         # clip_obs = self.cfg.normalization.clip_observations
         # self.obs_buf = torch.clip(self.obs_buf, -clip_obs, clip_obs)
@@ -255,9 +257,6 @@ class H1():
         self.last_actions[:] = self.actions[:]
         self.last_dof_vel[:] = self.dof_vel[:]
         self.last_root_vel[:] = self.root_states[:, 7:13]
-
-        if self.viewer and self.enable_viewer_sync and self.debug_viz:
-            self._draw_debug_vis()
 
     def check_termination(self):
         """ Check if environments need to be reset
