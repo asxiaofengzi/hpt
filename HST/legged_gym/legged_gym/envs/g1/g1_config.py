@@ -35,7 +35,7 @@ class G1RoughCfg( BaseConfig ):
         delay = 0.0 # delay in seconds
         freq = 20
         resample_on_env_reset = True
-        filename = '0007_Walking001_poses_120_jpos.npy'
+        filename = 'Form 1_poses_120_jpos.npy'
         least_time = 10 #至少要学习10秒
     class env:
         num_envs = 2048
@@ -186,8 +186,8 @@ class G1RoughCfg( BaseConfig ):
         arrow=''
         name = "g1"
         foot_name = '_ankle_roll_link'
-        penalize_contacts_on = ["elbow","knee","hip"]
-        terminate_after_contacts_on = []
+        penalize_contacts_on = [""]
+        terminate_after_contacts_on = ["knee"]
         target_pos = ['left_ankle_pitch_link','right_ankle_pitch_link','left_wrist_yaw_link','right_wrist_yaw_link']
         exclude_dof = ["wrist"]
         disable_gravity = False
@@ -221,26 +221,27 @@ class G1RoughCfg( BaseConfig ):
     class rewards:
         class scales:
             termination = -0
-            tracking_lin_vel = 1
-            tracking_ang_vel = 1
+            tracking_lin_vel = 0.2
+            tracking_ang_vel = 0.1
             lin_vel_z = -0
             ang_vel_xy = -0
             orientation = -0.
-            tracking_pos = 1
-            tracking_ornt = 1
+            tracking_pos = 0.2
+            tracking_ornt = 0.1
             torques = 0.0
             torques_limit = 0.01
             dof_vel = 0.0
             dof_acc = 0.0
             feet_air_time = 0.
-            collision = 0.2
+            collision = 0.0
             feet_stumble = -0.0 
             action_rate = 0.0
             stand_still = 0
             dof_pos_limits = 0.1
             dof_vel_limits = 0.1
-            target_jt = 2
-            target_vel = 1
+            target_jt = 20
+            target_pos = 0
+            target_jt_vel = 1.
             feet_slide = -0.1
             height = -0.0
             torso_stable = 0.
@@ -292,7 +293,7 @@ class G1RoughCfg( BaseConfig ):
         pos = [10, 0, 6]  # [m]
         lookat = [11., 5, 3.]  # [m]
         video = True
-        video_len = 10.
+        video_len = 20.
 
     class sim:
         dt =  0.005
@@ -335,7 +336,7 @@ class G1RoughCfgPPO(BaseConfig):
         entropy_coef = 1e-5
         num_learning_epochs = 2
         num_mini_batches = 4 # mini batch size = num_envs*nsteps / nminibatches
-        learning_rate = 1.e-4
+        learning_rate = 1.e-5
         schedule = 'adaptive' # could be adaptive, fixed
         gamma = 0.99
         lam = 0.95
@@ -353,7 +354,7 @@ class G1RoughCfgPPO(BaseConfig):
         experiment_name = 'rough_g1'
         run_name = None
         # load and resume
-        resume = False
+        resume = True
         load_run = -1 # -1 = last run
         checkpoint = -1 # -1 = last saved model
         resume_path = None # updated from load_run and chkpt

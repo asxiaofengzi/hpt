@@ -338,6 +338,7 @@ class G1():
             self.delayed_obs_target_jt = None
             self.delayed_obs_target_jt_steps = self.cfg.human.delay / self.target_jt_dt
             self.delayed_obs_target_jt_steps_int = sample_int_from_float(self.delayed_obs_target_jt_steps)
+
             self._reset_jt(torch.arange(self.num_envs, device=self.device))
 
 
@@ -353,19 +354,16 @@ class G1():
             base_quat = self.target_jt[:, 3:7]
             lin_vel = (self.target_jt_next[:,:3] - self.target_jt[:,:3])*self.cfg.human.freq
             ang_vel = quaternion_to_angular_velocity(self.target_jt[:,3:7],self.target_jt_next[:,3:7],  1/self.cfg.human.freq)
-            body_pos = self.body_pos[:,self.target_pos_idx] - self.root_states[:,:3].unsqueeze(1)
-            for i in range(body_pos.shape[1]):
-                body_pos[:,i] = quat_rotate_inverse(self.root_states[:,3:7], body_pos[:,i])
-            body_vel = (self.target_bp - body_pos)*(self.cfg.human.freq*4)
-            vel_norm = body_vel.norm(dim=-1) + 1e-6 #防止除零
-            body_vel = body_vel/vel_norm.sqrt().unsqueeze(-1)
+            # body_pos = self.body_pos[:,self.target_pos_idx] - self.root_states[:,:3].unsqueeze(1)
+            # for i in range(body_pos.shape[1]):
+            #     body_pos[:,i] = quat_rotate_inverse(self.root_states[:,3:7], body_pos[:,i])
+            # body_vel = (self.target_bp - body_pos)*(self.cfg.human.freq*4)
+            # vel_norm = body_vel.norm(dim=-1) + 1e-6 #防止除零
+            # body_vel = body_vel/vel_norm.sqrt().unsqueeze(-1)
             
             self.commands[:,:3] = quat_rotate_inverse(base_quat, lin_vel)
             self.commands[:,3:6] = quat_rotate_inverse(base_quat, ang_vel)
-            self.commands[:,6:] = body_vel.view(-1,12)
-
-            if (self.common_step_counter +1)% self.target_jt_update_steps_int == 0:
-                self.target_jt_j += 1
+            #self.commands[:,6:] = self.target_bp_next.view(-1,12)
             
             
             #self.__upd_root() # view
@@ -432,6 +430,8 @@ class G1():
         self.reset_idx(env_ids)
         self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
         self.update_target_jt()
+        if (self.common_step_counter +1)% self.target_jt_update_steps_int == 0:
+            self.target_jt_j += 1
         self.last_actions[:] = self.actions[:]
         self.last_dof_vel[:] = self.dof_vel[:]
         self.last_root_vel[:] = self.root_states[:, 7:13]
@@ -771,7 +771,8 @@ class G1():
     def _reset_jt(self, env_ids):
         if self.cfg.commands.command_type == "target":
             self.target_jt_i[env_ids] = torch.randint(0, self.num_target_jt_seq, (env_ids.shape[0],), device=self.device)
-            self.target_jt_j[env_ids] = torch.randint(0,self.target_jt_seq.shape[1] - self.cfg.human.least_time*self.cfg.human.freq, (env_ids.shape[0],), dtype=torch.long, device=self.device)
+            #self.target_jt_j[env_ids] = torch.randint(0,self.target_jt_seq.shape[1] - self.cfg.human.least_time*self.cfg.human.freq, (env_ids.shape[0],), dtype=torch.long, device=self.device)
+            self.target_jt_j[env_ids] = torch.zeros(env_ids.shape[0], dtype=torch.long, device=self.device)
             self.init_target_pos[env_ids] = self.target_jt_seq[self.target_jt_i[env_ids], self.target_jt_j[env_ids],:3]
             self.update_target_jt()
         
@@ -1345,7 +1346,7 @@ class G1():
         camera_props.width = 1024
         camera_props.height = 768
         self.camera_handle = self.gym.create_camera_sensor(self.envs[0], camera_props)
-        self.gym.set_camera_location(self.camera_handle, self.envs[0], gymapi.Vec3(2,1.2,1.5), gymapi.Vec3(0.,0.,0.8))
+        self.gym.set_camera_location(self.camera_handle, self.envs[0], gymapi.Vec3(3,3.2,4), gymapi.Vec3(0.,0.,0.))
 
     def save_video(self, path):
         self.video_frames = []
@@ -1512,15 +1513,19 @@ class G1():
         target_jt_exp = torch.exp(-4 * target_jt_error)
         self.target_jt_exp = torch.mean(target_jt_exp, dim=-1)
         return target_jt_exp, target_jt_error
+    
+    def _reward_target_jt_vel(self):
+        err = torch.sum(torch.abs(self.dof_vel - (self.target_jt_next[:,7:36] - self.target_jt[:,7:36])*self.cfg.human.freq)*self.dof_weights, dim=1)/self.dof_weights.sum()
+        return torch.exp(-0.3 * err), err
 
-    def _reward_target_vel(self):
+    def _reward_target_pos(self):
         #Penalize body vel error
-        body_vel = self.body_vel[:,self.target_pos_idx]
-        for i in range(body_vel.shape[1]):
-            body_vel[:,i] = quat_rotate_inverse(self.base_quat, body_vel[:,i])
-        vel_cmd = self.commands[:,6:18].view(-1,4,3)
-        target_pos_err = torch.sum(torch.norm(body_vel-vel_cmd, dim=-1)*(vel_cmd.norm(dim=-1) > 0.2), dim=-1)
-        return torch.exp(-0.1 * target_pos_err), target_pos_err
+        body_pos = self.body_pos[:,self.target_pos_idx] - self.root_states[:,:3].unsqueeze(1)
+        for i in range(body_pos.shape[1]):
+            body_pos[:,i] = quat_rotate_inverse(self.base_quat, body_pos[:,i])
+        pos_cmd = self.commands[:,6:18].view(-1,4,3)
+        target_pos_err = torch.sum(torch.norm(body_pos-pos_cmd, dim=-1)*(pos_cmd.norm(dim=-1) > 0.2), dim=-1)
+        return torch.exp(-1 * target_pos_err), target_pos_err
     
     def _reward_feet_slide(self) -> torch.Tensor:
         """Penalize feet sliding.
