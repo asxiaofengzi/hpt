@@ -59,7 +59,7 @@ class Transformer_Block(nn.Module):
         return x
 
 class Transformer(nn.Module):
-    def __init__(self, input_dim, output_dim, context_len, latent_dim=256, num_head=4, num_layer=4, dropout_rate=0.1) -> None:
+    def __init__(self, input_dim, output_dim, context_len, latent_dim=128, num_head=4, num_layer=4, dropout_rate=0.1) -> None:
         super().__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
@@ -116,6 +116,7 @@ class ActorCriticTransformer(nn.Module):
         # Action noise
         self.std = nn.Parameter(init_noise_std * torch.ones(num_actions))
         self.distribution = None
+        self.sp = nn.Softplus()
         # disable args validation for speedup
         Normal.set_default_validate_args = False
 
@@ -139,7 +140,7 @@ class ActorCriticTransformer(nn.Module):
 
     def update_distribution(self, observations):
         mean = self.actor(observations)
-        self.distribution = Normal(mean, self.std)
+        self.distribution = Normal(mean, self.sp(self.std))
 
     def act(self, observations, **kwargs):
         self.update_distribution(observations)
