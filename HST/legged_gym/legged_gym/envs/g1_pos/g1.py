@@ -44,12 +44,13 @@ from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.utils.terrain import Terrain
 from legged_gym.utils.math import quat_apply_yaw, wrap_to_pi, torch_rand_sqrt_float, euler_from_quat
 from legged_gym.utils.helpers import class_to_dict
-from legged_gym.utils.human import load_target_jt_upb
+from legged_gym.utils.human import load_target_jt_pos
 from .g1_config import G1RoughCfg
 import IPython; e = IPython.embed
 import imageio
 import torch
 import numpy as np
+from .vpid import vpid_controler
 
 def quaternion_to_angular_velocity(R0, R1, delta_t):
     """
@@ -317,6 +318,7 @@ class G1():
                 self.viewer, gymapi.KEY_V, "toggle_viewer_sync")
 
     def get_observations(self):
+        return self.obs_buf
         return self.obs_history_buf
     
     def get_privileged_observations(self):
@@ -325,7 +327,7 @@ class G1():
 
     def _init_target_jt(self):
         if self.cfg.commands.command_type == "target":
-            self.target_jt_seq, self.target_jt_len = load_target_jt_upb(self.device, self.cfg.human.filename, self.default_dof_pos, self.cfg.human.freq)
+            self.target_jt_seq, self.target_jt_len = load_target_jt_pos(self.device, self.cfg.human.filename, self.default_dof_pos, self.cfg.human.freq)
             self.num_target_jt_seq = self.target_jt_seq.shape[0]
             print(f"Loaded target joint trajectories of shape {self.target_jt_seq.shape}")
             self.target_jt_dt = 1 / self.cfg.human.freq
@@ -333,7 +335,7 @@ class G1():
             assert(self.dt <= self.target_jt_dt)
             self.target_jt_i = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
             self.target_jt_j = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-            self.target_pool_i = 1153
+            self.target_pool_i = 0
             self.target_pool_dones = 0
             self.target_pool_jterr = 0.3
             self.target_jt_exp = torch.tensor(0., dtype=torch.long, device=self.device)
@@ -352,7 +354,7 @@ class G1():
             self.target_jt_next = self.target_jt_seq[self.target_jt_i, self.target_jt_j+1]
             self.target_bp = self.target_jt[:,36:].view(self.num_envs,-1,3)
             self.target_bp_next = self.target_jt_next[:,36:].view(self.num_envs,-1,3)
-            self.delayed_obs_target_jt = self.target_jt_seq[self.target_jt_i, torch.maximum(self.target_jt_j - self.delayed_obs_target_jt_steps_int, torch.tensor(0)),7:18]
+            self.delayed_obs_target_jt = self.target_jt_seq[self.target_jt_i, torch.maximum(self.target_jt_j - self.delayed_obs_target_jt_steps_int, torch.tensor(0)),7:36]
 
             base_quat = self.target_jt[:, 3:7]
             lin_vel = (self.target_jt_next[:,:3] - self.target_jt[:,:3])*self.cfg.human.freq
@@ -371,7 +373,11 @@ class G1():
             
             #self.__upd_root() # view
 
-
+    def clip_torques(self, torques):
+        ret = torch.clip(torques, -self.torque_limits, self.torque_limits)
+        self.limit_torque[:] = torques - ret
+        return ret
+    
     def step(self, actions):
         """ Apply actions, simulate, call self.post_physics_step()
 
@@ -385,14 +391,19 @@ class G1():
             self.action_history_buf = torch.cat([self.action_history_buf[:, 1:], actions[:, None, :]], dim=1)
             actions = self.action_history_buf[:, -self.action_delay - 1] # delay for 1/50=20ms
         self.actions = actions.clone()
-
-        for _ in range(self.cfg.control.decimation):
-            self.torques = self._compute_torques(self.actions)
+        
+        tg = torch.concatenate((self.target_jt_seq[self.target_jt_i, self.target_jt_j-1].unsqueeze(0),self.target_jt_seq[self.target_jt_i, self.target_jt_j].unsqueeze(0),self.target_jt_seq[self.target_jt_i, self.target_jt_j+1].unsqueeze(0)))
+        self.torques[:] = self.clip_torques(self.vpid.compute_torque(self.torques, tg[:,:,7:], self.pos_buf))
+        for i in range(self.cfg.control.decimation):
+            
             self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self.torques))
             self.gym.simulate(self.sim)
             if self.device == 'cpu':
                 self.gym.fetch_results(self.sim, True)
             self.gym.refresh_dof_state_tensor(self.sim)
+            self.pos_buf[4+i] = self.dof_pos
+            self.torques[:] = self.clip_torques(self.vpid.update_pos(self.torques, tg[:,:,7:], self.pos_buf))
+        self.pos_buf[:4] = self.pos_buf[4:]
         self.post_physics_step()
 
         # return clipped obs, clipped states (None), rewards, dones and infos
@@ -401,7 +412,7 @@ class G1():
         # if self.privileged_obs_buf is not None:
         #     self.privileged_obs_buf = torch.clip(self.privileged_obs_buf, -clip_obs, clip_obs)
 
-        return self.obs_history_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
+        return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
 
     def post_physics_step(self):
         """ check terminations, compute observations and rewards
@@ -560,31 +571,33 @@ class G1():
     def compute_observations(self):
         """ Computes observations
         """
-        self.obs_buf = torch.cat((  self.base_orn_rp * self.obs_scales.orn,  # [0:2]
-                                    self.base_ang_vel * self.obs_scales.ang_vel,  # [2:5]
-                                    self.base_lin_acc * self.obs_scales.lin_acc,    # [5:8]
-                                    self.commands * self.commands_scale,  
-                                    self.dof_pos[:,self.execute_dof] * self.obs_scales.dof_pos,  # [8:8+num_dofs]
-                                    self.dof_vel[:,self.execute_dof] * self.obs_scales.dof_vel,  # [8+num_dofs:8+2*num_dofs]
-                                    self.actions,  # [8+2*num_dofs:8+3*num_dofs]
-                                    ),dim=-1)
+        # self.obs_buf = torch.cat((  self.base_orn_rp * self.obs_scales.orn,  # [0:2]
+        #                             self.base_ang_vel * self.obs_scales.ang_vel,  # [2:5]
+        #                             self.base_lin_acc * self.obs_scales.lin_acc,    # [5:8]
+        #                             self.commands * self.commands_scale,  
+        #                             self.dof_pos[:,self.execute_dof] * self.obs_scales.dof_pos,  # [8:8+num_dofs]
+        #                             self.dof_vel[:,self.execute_dof] * self.obs_scales.dof_vel,  # [8+num_dofs:8+2*num_dofs]
+        #                             self.actions,  # [8+2*num_dofs:8+3*num_dofs]
+        #                             self.vpid.data[:,:,0]
+        #                             ),dim=-1)
+        self.obs_buf[:,:] = self.vpid.data[:,:,:3].reshape(self.num_envs, -1)
         # print(self.target_jt_j[:3], self.target_jt_i[:3])
-        if self.cfg.commands.command_type == 'target':
-            obs_target = self.delayed_obs_target_jt * self.obs_scales.dof_pos
-            if self.cfg.domain_rand.drop_target:
-                obs_target *= (torch.rand(self.execute_dof.shape[0],device=self.device)>self.target_jt_exp)
-        else:
-            obs_target = torch.zeros(self.num_envs, self.num_dofs, dtype=torch.float32, device=self.device)
-        self.obs_buf = torch.cat([self.obs_buf, obs_target], dim=-1)
+        # if self.cfg.commands.command_type == 'target':
+        #     obs_target = self.delayed_obs_target_jt * self.obs_scales.dof_pos
+        #     if self.cfg.domain_rand.drop_target:
+        #         obs_target *= (torch.rand(self.execute_dof.shape[0],device=self.device)>self.target_jt_exp)
+        # else:
+        #     obs_target = torch.zeros(self.num_envs, self.num_dofs, dtype=torch.float32, device=self.device)
+        # self.obs_buf = torch.cat([self.obs_buf, obs_target], dim=-1)
 
-        # add perceptive inputs if not blind
-        if self.cfg.terrain.measure_heights:
-            heights = torch.clip(self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights, -1, 1.) * self.obs_scales.height_measurements
-            self.obs_buf = torch.cat((self.obs_buf, heights), dim=-1)
-        # add noise if needed
-        if self.cfg.noise.add_noise:
-            self.obs_buf += (2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec
-            self.obs_buf *= (torch.rand_like(self.obs_buf)-0.5)*(2*self.cfg.noise.noise_ratio) + 1.0
+        # # add perceptive inputs if not blind
+        # if self.cfg.terrain.measure_heights:
+        #     heights = torch.clip(self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights, -1, 1.) * self.obs_scales.height_measurements
+        #     self.obs_buf = torch.cat((self.obs_buf, heights), dim=-1)
+        # # add noise if needed
+        # if self.cfg.noise.add_noise:
+        #     self.obs_buf += (2 * torch.rand_like(self.obs_buf) - 1) * self.noise_scale_vec
+        #     self.obs_buf *= (torch.rand_like(self.obs_buf)-0.5)*(2*self.cfg.noise.noise_ratio) + 1.0
 
         self.obs_history_buf = torch.cat([
             self.obs_history_buf[:, 1:],
@@ -725,7 +738,7 @@ class G1():
             self.commands[env_ids, 5] = torch_rand_float(self.command_ranges["ang_vel_yaw"][0], self.command_ranges["ang_vel_yaw"][1], (len(env_ids), 1), device=self.device).squeeze(1)
         self.commands[env_ids, :2] *= (torch.norm(self.commands[env_ids, :2], dim=1) > 0.2).unsqueeze(1)            
         
-    def _compute_torques(self, actions):
+    def _compute_torques(self, actions, idec):
         """ Compute torques from actions.
             Actions can be interpreted as position or velocity targets given to a PD controller, or directly as scaled torques.
             [NOTE]: torques must have the same dimension as the number of DOFs, even if some DOFs are not actuated.
@@ -738,7 +751,7 @@ class G1():
         """
         #pd controller
         
-        self.actions_scaled[:,self.execute_dof] = actions * self.cfg.control.action_scale
+        #self.actions_scaled[:] = actions * self.cfg.control.action_scale
         control_type = self.cfg.control.control_type
         if control_type=="P":
             target_dof_pos = self.actions_scaled + self.default_dof_pos
@@ -749,20 +762,9 @@ class G1():
             torques = self.p_gains*(self.actions_scaled - self.dof_vel) - self.d_gains*(self.dof_vel - self.last_dof_vel)/self.sim_params.dt
         elif control_type=="T":
             torques = self.actions_scaled
-        elif control_type=='C':
-            target_dof_pos = self.target_jt[7:18]
-            if self.cfg.control.clip_actions:
-                target_dof_pos = torch.clip(target_dof_pos, self.dof_pos_limits[:, 0], self.dof_pos_limits[:, 1])
-            torques = self.p_gains*(target_dof_pos - self.dof_pos + self.actions_scaled) - self.d_gains*self.dof_vel
-        elif control_type=="W":
-            torques = (torch.pow(1.2, torch.abs(self.actions_scaled*25))-1)*((self.actions_scaled<0)*-1.+(self.actions_scaled>=0))
-            torques *= self.torque_limits/self.torque_powlim
         else:
             raise NameError(f"Unknown controller type: {control_type}")
-        ret = torch.clip(torques, -self.torque_limits, self.torque_limits)
-        self.limit_torque[:] = torques - ret
-
-        return ret
+        return self.clip_torques(torques)
 
 
 
@@ -776,8 +778,8 @@ class G1():
                 self.target_pool_jterr = 0.3
                 self.target_pool_i = (self.target_pool_i+1)%self.num_target_jt_seq
             self.target_jt_i[env_ids] = self.target_pool_i
-            self.target_jt_j[env_ids] = torch.randint(0,int(self.target_jt_len[self.target_pool_i].item()) - int(self.cfg.human.least_time*self.cfg.human.freq), (env_ids.shape[0],), dtype=torch.long, device=self.device)
-            #self.target_jt_j[env_ids] = torch.zeros(env_ids.shape[0], dtype=torch.long, device=self.device)
+            #self.target_jt_j[env_ids] = torch.randint(0,int(self.target_jt_len[self.target_pool_i].item()) - int(self.cfg.human.least_time*self.cfg.human.freq), (env_ids.shape[0],), dtype=torch.long, device=self.device)
+            self.target_jt_j[env_ids] = torch.zeros(env_ids.shape[0], dtype=torch.long, device=self.device)
             self.init_target_pos[env_ids] = self.target_jt_seq[self.target_jt_i[env_ids], self.target_jt_j[env_ids],:3]
             self.update_target_jt()
         #self.target_jt[env_ids] = self.target_jt_seq[self.target_jt_i[env_ids], self.target_jt_j[env_ids]]
@@ -793,11 +795,11 @@ class G1():
             env_ids (List[int]): Environemnt ids
         """
         if self.cfg.commands.command_type == "target":
-            self.dof_pos[env_ids][:,self.execute_dof] = self.target_jt[env_ids,7:18] + torch_rand_float(-0.05, 0.05, (len(env_ids), self.num_actions), device=self.device)
-            self.dof_vel[env_ids][:,self.execute_dof] = (self.target_jt_next[env_ids, 7:18] - self.target_jt[env_ids, 7:18]) * self.cfg.human.freq * torch_rand_float(0.9, 1.1, (len(env_ids), self.num_actions), device=self.device)
+            self.dof_pos[env_ids][:,self.execute_dof] = self.target_jt[env_ids,7:36] + torch_rand_float(-0.05, 0.05, (len(env_ids), self.num_dofs), device=self.device)
+            self.dof_vel[env_ids][:,self.execute_dof] = (self.target_jt_next[env_ids, 7:36] - self.target_jt[env_ids, 7:36]) * self.cfg.human.freq * torch_rand_float(0.9, 1.1, (len(env_ids), self.num_dofs), device=self.device)
         else:
-            self.dof_pos[env_ids][:,self.execute_dof] = self.default_dof_pos + torch_rand_float(-0.05, 0.05, (len(env_ids), self.num_actions), device=self.device)
-            self.dof_vel[env_ids][:,self.execute_dof] = torch_rand_float(-0.05, 0.05, (len(env_ids), self.num_actions), device=self.device)
+            self.dof_pos[env_ids][:,self.execute_dof] = self.default_dof_pos + torch_rand_float(-0.05, 0.05, (len(env_ids), self.num_dofs), device=self.device)
+            self.dof_vel[env_ids][:,self.execute_dof] = torch_rand_float(-0.05, 0.05, (len(env_ids), self.num_dofs), device=self.device)
         env_ids_int32 = env_ids.to(dtype=torch.int32)
         self.gym.set_dof_state_tensor_indexed(self.sim,
                                               gymtorch.unwrap_tensor(self.dof_state),
@@ -838,8 +840,8 @@ class G1():
         self.root_states[:, 7:10] = (self.target_jt_next[:,:3] - self.target_jt[:,:3])*self.cfg.human.freq
         self.root_states[:, 10:13] = quaternion_to_angular_velocity(self.target_jt[:,3:7],self.target_jt_next[:,3:7],  1/self.cfg.human.freq) #dq/dt = 1/2*w*q
 
-        self.dof_pos[:,self.execute_dof] = self.target_jt[:,7:18]
-        self.dof_vel[:,self.execute_dof] = (self.target_jt_next[:, 7:18] - self.target_jt[:, 7:18])
+        self.dof_pos[:,self.execute_dof] = self.target_jt[:,7:36]
+        self.dof_vel[:,self.execute_dof] = (self.target_jt_next[:, 7:36] - self.target_jt[:, 7:36])
         
         self.gym.set_actor_root_state_tensor(self.sim, gymtorch.unwrap_tensor(self.root_states))
         self.gym.set_dof_state_tensor(self.sim, gymtorch.unwrap_tensor(self.dof_state))
@@ -947,7 +949,7 @@ class G1():
         self.limit_torque = torch.zeros(self.num_envs, self.num_dofs, dtype=torch.float, device=self.device, requires_grad=False)
         self.p_gains = torch.zeros(self.num_dofs, dtype=torch.float, device=self.device, requires_grad=False)
         self.d_gains = torch.zeros(self.num_dofs, dtype=torch.float, device=self.device, requires_grad=False)
-        self.execute_dof = torch.zeros(self.num_actions, dtype=torch.long, device=self.device, requires_grad=False)
+        self.execute_dof = torch.zeros(self.num_dofs, dtype=torch.long, device=self.device, requires_grad=False)
         self.actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.actions_scaled = torch.zeros(self.num_envs, self.num_dofs, dtype=torch.float, device=self.device, requires_grad=False)
         self.last_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
@@ -967,7 +969,8 @@ class G1():
         self.torque_table = torch.zeros(self.cfg.control.discrete_lev*2+1,dtype=torch.float, device=self.device)
         self.init_pos = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device)
         self.init_target_pos = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device)
-        
+        self.pos_buf = torch.zeros((self.cfg.control.decimation*2, self.num_envs, self.num_dofs), dtype=torch.float, device=self.device)
+
         self._init_discrete_table()
         # self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
         if self.cfg.terrain.measure_heights:
@@ -1202,7 +1205,7 @@ class G1():
         for i in range(len(termination_contact_names)):
             self.termination_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], termination_contact_names[i])
         
-
+        self.vpid = vpid_controler(self.num_envs, self.num_dofs, 1, 1.3, 1.3, self.cfg.control.decimation, self.torque_limits)
         print('penalized_contact_indices: {}'.format(self.penalized_contact_indices))
         print('termination_contact_indices: {}'.format(self.termination_contact_indices))
         print('feet_indices: {}'.format(self.feet_indices))
@@ -1514,14 +1517,14 @@ class G1():
         return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.cfg.rewards.max_contact_force).clip(min=0.), dim=1)
 
     def _reward_target_jt(self):
-        target_jt_error = torch.sum(torch.abs(self.dof_pos[:,self.execute_dof] - self.target_jt[:,7:18])*self.dof_weights[self.execute_dof], dim=1)/self.dof_weights[self.execute_dof].sum()
+        target_jt_error = torch.sum(torch.abs(self.dof_pos[:,self.execute_dof] - self.target_jt[:,7:36])*self.dof_weights[self.execute_dof], dim=1)/self.dof_weights[self.execute_dof].sum()
         target_jt_exp = torch.exp(-1 * target_jt_error)
         self.target_jt_exp = torch.mean(target_jt_exp, dim=-1)
         self.target_pool_jterr = self.target_pool_jterr*0.9 + target_jt_error.mean(dim=-1)*0.1
         return target_jt_exp, torch.tensor([self.target_pool_jterr], dtype=torch.float32, device=self.device)
     
     def _reward_target_jt_vel(self):
-        err = torch.sum(torch.abs(self.dof_vel[:,self.execute_dof] - (self.target_jt_next[:,7:18] - self.target_jt[:,7:18])*self.cfg.human.freq)*self.dof_weights[self.execute_dof], dim=1)/self.dof_weights[self.execute_dof].sum()
+        err = torch.sum(torch.abs(self.dof_vel[:,self.execute_dof] - (self.target_jt_next[:,7:36] - self.target_jt[:,7:36])*self.cfg.human.freq)*self.dof_weights[self.execute_dof], dim=1)/self.dof_weights[self.execute_dof].sum()
         return torch.exp(-0.3 * err), err
 
     def _reward_target_pos(self):

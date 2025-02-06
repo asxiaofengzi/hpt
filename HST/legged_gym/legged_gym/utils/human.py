@@ -47,3 +47,24 @@ def load_target_jt_upb(device, file, offset, freq):
         target_jt_lenth[i] = one_target_jt.shape[0]
         i += 1
     return target_jt_tensor, target_jt_lenth
+
+def load_target_jt_pos(device, file, offset, freq):
+    with open(file) as f:
+        files = f.readlines()
+    
+    sz = len(files)
+    target_jt_tensor = torch.zeros((sz,20*freq,36), dtype=torch.float32, device=device)
+    target_jt_lenth = torch.zeros(sz, dtype=torch.float32, device=device)
+    i = 0
+    for f in files:
+        fr = f[-13:-10]
+        fr = int(fr[1:]) if fr[0]=='_' else int(fr)
+        assert(freq<= fr)
+        sampling_rate = fr // freq #向快对齐
+
+        one_target_jt = np.load(f[:-1]).astype(np.float32)
+        one_target_jt = one_target_jt[:freq*20*sampling_rate:sampling_rate,:36]
+        target_jt_tensor[i,:one_target_jt.shape[0],:] = torch.tensor(one_target_jt, dtype=torch.float32, device=device)
+        target_jt_lenth[i] = one_target_jt.shape[0]
+        i += 1
+    return target_jt_tensor, target_jt_lenth

@@ -35,19 +35,19 @@ class G1RoughCfg( BaseConfig ):
         delay = 0.0 # delay in seconds
         freq = 20
         resample_on_env_reset = True
-        filename = '/home/fleaven/dataset/AMASS/g1/train0.csv'
+        filename = '/home/fleaven/dataset/AMASS/g1/Book1.csv'
         least_time = 2.5 #至少要学习10秒
     class env:
-        num_envs = 2500
+        num_envs = 100
         num_dofs = 29
-        num_observations = 70 # TODO
+        num_observations = 29*3 # TODO
         num_privileged_obs = None # if not None a priviledge_obs_buf will be returned by step() (critic obs for assymetric training). None is returned otherwise 
-        num_actions = 11
+        num_actions = 29*3
         env_spacing = 3.  # not used with heightfields/trimeshes 
         send_timeouts = True # send time out information to the algorithm
         episode_length_s = 10 # episode length in seconds
 
-        action_delay = 1  # -1 for no delay
+        action_delay = -1  # -1 for no delay
         obs_context_len = 4
 
     class terrain:
@@ -88,7 +88,7 @@ class G1RoughCfg( BaseConfig ):
             heading = [0, 0]
 
     class init_state:
-        pos = [0.0, 0.0, 0.793] # x,y,z [m]
+        pos = [0.0, 0.0, 0.893] # x,y,z [m]
         rot = [0.0, 0.0, 0.0, 1.0] # x,y,z,w [quat]
         lin_vel = [0.0, 0.0, 0.0]  # x,y,z [m/s]
         ang_vel = [0.0, 0.0, 0.0]  # x,y,z [rad/s]
@@ -157,7 +157,7 @@ class G1RoughCfg( BaseConfig ):
         }
 
     class control:
-        control_type = 'P'
+        control_type = 'VPID'
         # PD Drive parameters:
         stiffness = {'default': 100.,
                     'hip_yaw_joint':150.,
@@ -189,7 +189,7 @@ class G1RoughCfg( BaseConfig ):
         penalize_contacts_on = [""]
         terminate_after_contacts_on = ["knee"]
         target_pos = ['left_ankle_pitch_link','right_ankle_pitch_link','left_wrist_yaw_link','right_wrist_yaw_link']
-        exclude_dof = ['wrist','ankle','knee','hip']
+        exclude_dof = []#['wrist','ankle','knee','hip']
         disable_gravity = False
         collapse_fixed_joints = True # merge bodies connected by fixed joints. Specific fixed joints can be kept by adding " <... dont_collapse="true">
         fix_base_link = True # fixe the base of the robot
@@ -321,12 +321,13 @@ class G1RoughCfgPPO(BaseConfig):
     runner_class_name = 'OnPolicyRunner'
     class policy:
         init_noise_std = 0.9
-        # actor_hidden_dims = [512, 256, 256]   transformer ppo 已不用这些参数
-        # critic_hidden_dims = [512, 256, 256]
-        # activation = 'elu' # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
-        # only for 'ActorCriticRecurrent':
+        #transformer ppo 已不用这些参数
+        actor_hidden_dims = [128, 128, 64]   
+        critic_hidden_dims = [128, 128, 64]
+        activation = 'elu' # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
+        #only for 'ActorCriticRecurrent':
         # rnn_type = 'lstm'
-        # rnn_hidden_size = 512
+        # rnn_hidden_size = 128
         # rnn_num_layers = 1
         
     class algorithm:
@@ -345,17 +346,17 @@ class G1RoughCfgPPO(BaseConfig):
         max_grad_norm = 1.
 
     class runner:
-        policy_class_name = 'ActorCriticTransformer'
+        policy_class_name = 'ActorCritic'
         algorithm_class_name = 'PPO'
         num_steps_per_env = 32 # per iteration
         max_iterations = 1000000 # number of policy updates
 
         # logging
         save_interval = 1000 # check for potential saves every this many iterations
-        experiment_name = 'rough_g1_ub'
+        experiment_name = 'rough_g1_pos'
         run_name = None
         # load and resume
-        resume = True
+        resume = False
         load_run = -1 # -1 = last run
         checkpoint = -1 # -1 = last saved model
         resume_path = None # updated from load_run and chkpt

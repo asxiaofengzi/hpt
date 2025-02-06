@@ -63,12 +63,12 @@ class OnPolicyRunner:
         else:
             num_critic_obs = self.env.num_obs
         actor_critic_class = eval(self.cfg["policy_class_name"]) # ActorCritic
-        actor_critic: ActorCriticTransformer = actor_critic_class( 
+        actor_critic = actor_critic_class( 
             self.env.num_obs,
             num_critic_obs,
-            self.env.num_actions,
-            self.env.obs_context_len,
-            **self.policy_cfg
+            self.env.num_actions
+            # self.env.obs_context_len,
+            # **self.policy_cfg
         ).to(self.device)
         alg_class = eval(self.cfg["algorithm_class_name"]) # PPO
         self.alg = PPO(actor_critic, device=self.device, **self.alg_cfg)
@@ -77,7 +77,7 @@ class OnPolicyRunner:
         self.video_step=-1
 
         # init storage and model
-        self.alg.init_storage(self.env.num_envs, self.num_steps_per_env, [self.env.obs_context_len, self.env.num_obs], [self.env.num_privileged_obs], [self.env.num_actions])
+        self.alg.init_storage(self.env.num_envs, self.num_steps_per_env, [self.env.num_obs], [self.env.num_privileged_obs], [self.env.num_actions])
 
         # Log
         self.log_dir = log_dir
