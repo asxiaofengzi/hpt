@@ -16,7 +16,7 @@ dist/
 *.ckpt
 *.tar
 *.npz
-*.npy
+#*.npy
 *.pkl
 *.hdf5
 
@@ -74,7 +74,7 @@ runs
 __pycache__/
 .pytest_cache
 wandb/
-data/
+#data/
 log_*
 
-HST/isaacgym/
+#HST/isaacgym/
