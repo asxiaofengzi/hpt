@@ -57,12 +57,19 @@ def load_target_jt_pos(device, file, offset, freq):
     target_jt_lenth = torch.zeros(sz, dtype=torch.float32, device=device)
     i = 0
     for f in files:
-        fr = f[-13:-10]
-        fr = int(fr[1:]) if fr[0]=='_' else int(fr)
+        # fr = f[-13:-10]
+        # fr = int(fr[1:]) if fr[0]=='_' else int(fr)
+        import re
+        match = re.search(r'_(\d+)_', f)
+        if match:
+            fr = int(match.group(1))
+        else:
+            fr = 60
         assert(freq<= fr)
         sampling_rate = fr // freq #向快对齐
 
-        one_target_jt = np.load(f[:-1]).astype(np.float32)
+        # one_target_jt = np.load(f[:-1]).astype(np.float32)
+        one_target_jt = np.load(f).astype(np.float32)
         one_target_jt = one_target_jt[:freq*20*sampling_rate:sampling_rate,:36]
         target_jt_tensor[i,:one_target_jt.shape[0],:] = torch.tensor(one_target_jt, dtype=torch.float32, device=device)
         target_jt_lenth[i] = one_target_jt.shape[0]

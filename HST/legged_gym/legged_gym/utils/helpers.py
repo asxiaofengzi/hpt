@@ -148,14 +148,14 @@ def update_cfg_from_args(env_cfg, train_cfg, args):
 
 def get_args(test=False):
     custom_parameters = [
-        {"name": "--task", "type": str, "default": "h1", "help": "Resume training or start testing from a checkpoint. Overrides config file if provided."},
+        {"name": "--task", "type": str, "default": "g1_pos", "help": "Resume training or start testing from a checkpoint. Overrides config file if provided."},
         {"name": "--resume", "action": "store_true", "default": False,  "help": "Resume training from a checkpoint"},
         {"name": "--experiment_name", "type": str,  "help": "Name of the experiment to run or load. Overrides config file if provided."},
         {"name": "--run_name", "type": str,  "required": True if not test else False,  "help": "Name of the run. Overrides config file if provided."},
         {"name": "--load_run", "type": str, "default": "", "help": "Name of the run to load when resume=True. If -1: will load the last run. Overrides config file if provided."},
         {"name": "--checkpoint", "type": str,"default": "-1",  "help": "Saved model checkpoint number. If -1: will load the last checkpoint. Overrides config file if provided."},
 
-        {"name": "--headless", "action": "store_true", "default": True, "help": "Force display off at all times"},
+        {"name": "--headless", "action": "store_true", "default": False, "help": "Force display off at all times"},
         {"name": "--rl_device", "type": str, "default": "cuda:0", "help": 'Device used by the RL algorithm, (cpu, gpu, cuda:0, cuda:1 etc..)'},
         {"name": "--stochastic", "action": "store_true", "default": False, "help": "Use stochastic actions to play"},
         {"name": "--use_jit", "action": "store_true", "default": False,  "help": "Use jit to play"},

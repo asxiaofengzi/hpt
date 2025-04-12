@@ -35,10 +35,10 @@ class G1RoughCfg( BaseConfig ):
         delay = 0.0 # delay in seconds
         freq = 20
         resample_on_env_reset = True
-        filename = '/home/fleaven/dataset/AMASS/g1/Book1.csv'
+        filename = '/mnt/data1/xiaofengzi/hpt/HST/legged_gym/data/motion.csv'
         least_time = 2.5 #至少要学习10秒
     class env:
-        num_envs = 100
+        num_envs = 1
         num_dofs = 29
         num_observations = 29*3 # TODO
         num_privileged_obs = None # if not None a priviledge_obs_buf will be returned by step() (critic obs for assymetric training). None is returned otherwise 
@@ -182,7 +182,7 @@ class G1RoughCfg( BaseConfig ):
         discrete_lev = 25
         
     class asset:
-        file = '/home/fleaven/robot/unitree_ros/robots/g1_description/g1_29dof_rev_1_0.urdf'
+        file = '/mnt/data1/xiaofengzi/hpt/HST/legged_gym/resources/robots/g1_description/g1_29dof_rev_1_0.urdf'
         arrow=''
         name = "g1"
         foot_name = '_ankle_roll_link'
@@ -354,7 +354,7 @@ class G1RoughCfgPPO(BaseConfig):
         # logging
         save_interval = 1000 # check for potential saves every this many iterations
         experiment_name = 'rough_g1_pos'
-        run_name = None
+        run_name = "g1_pos"
         # load and resume
         resume = False
         load_run = -1 # -1 = last run
